@@ -1,0 +1,6 @@
+.env
+.env.*
+.circle/
+*recovery*
+node_modules/
+dist/
