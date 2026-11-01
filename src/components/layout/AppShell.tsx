@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
 
 const COLLAPSE_KEY = 'vestros-sidebar-collapsed'
+const TABLET_BREAKPOINT = 1280
 
 interface AppShellProps {
   children: ReactNode
@@ -14,9 +15,15 @@ export function AppShell({ children, onRefresh }: AppShellProps) {
   const location = useLocation()
 
   const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem(COLLAPSE_KEY) === '1' } catch { return false }
+    try {
+      const stored = localStorage.getItem(COLLAPSE_KEY)
+      if (stored !== null) return stored === '1'
+    } catch { /* ignore */ }
+    return typeof window !== 'undefined' && window.innerWidth < TABLET_BREAKPOINT
   })
   const [mobileOpen, setMobileOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const wasMobileOpenRef = useRef(false)
 
   const toggleCollapse = useCallback(() => setCollapsed(v => !v), [])
   const toggleMobile   = useCallback(() => setMobileOpen(v => !v), [])
@@ -44,12 +51,17 @@ export function AppShell({ children, onRefresh }: AppShellProps) {
     return () => document.removeEventListener('keydown', handler)
   }, [closeMobile])
 
+  useEffect(() => {
+    if (wasMobileOpenRef.current && !mobileOpen) menuButtonRef.current?.focus()
+    wasMobileOpenRef.current = mobileOpen
+  }, [mobileOpen])
+
   return (
     <div className="flex h-dvh overflow-hidden" style={{ background: 'var(--bg)' }}>
 
       {/* ── Desktop sidebar ────────────────────────────────────────────────── */}
-      <div className="hidden lg:flex h-full overflow-hidden shrink-0">
-        <Sidebar collapsed={collapsed} onToggle={toggleCollapse} />
+      <div className="hidden lg:flex h-full overflow-visible shrink-0">
+        <Sidebar key={`${location.pathname}${location.search}`} collapsed={collapsed} onToggle={toggleCollapse} />
       </div>
 
       {/* ── Mobile sidebar backdrop ────────────────────────────────────────── */}
@@ -74,7 +86,7 @@ export function AppShell({ children, onRefresh }: AppShellProps) {
         aria-modal="true"
         aria-label="Navigation"
       >
-        <Sidebar collapsed={false} onToggle={closeMobile} onNavigate={closeMobile} />
+        <Sidebar key={`mobile-${location.pathname}${location.search}`} collapsed={false} onToggle={closeMobile} onNavigate={closeMobile} mobile mobileOpen={mobileOpen} />
       </div>
 
       {/* ── Right panel: topbar + main ─────────────────────────────────────── */}
@@ -83,6 +95,7 @@ export function AppShell({ children, onRefresh }: AppShellProps) {
           onMenuClick={toggleMobile}
           showMenu={true}
           onRefresh={onRefresh}
+          menuButtonRef={menuButtonRef}
         />
         <main
           className="flex-1 overflow-y-auto overflow-x-hidden"

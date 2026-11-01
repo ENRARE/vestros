@@ -22,38 +22,6 @@ import {GrantVesting} from "../GrantVesting.sol";
 //
 // Never pass --private-key on mainnet.
 
-/// @dev Returns the effective broadcast address without requiring PRIVATE_KEY.
-///      Foundry sets tx.origin to the active signer (ledger/keystore/key) before
-///      run() executes, so vm.envOr + vm.startBroadcast() covers all modes.
-library DeployLib {
-    address constant FOUNDRY_DEFAULT_SENDER =
-        0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
-
-    function startBroadcast() internal returns (address deployer) {
-        uint256 key = vm.envOr("PRIVATE_KEY", uint256(0));
-        if (key != 0) {
-            deployer = vm.addr(key);
-            vm.startBroadcast(key);
-        } else {
-            deployer = msg.sender;
-            vm.startBroadcast();
-        }
-        require(
-            deployer != FOUNDRY_DEFAULT_SENDER,
-            "DeployGrantHub: no signer — pass --ledger, --account, or set PRIVATE_KEY"
-        );
-    }
-}
-
-// We need vm access inside the library but Script is a contract, not a library.
-// Inline the Vm interface directly:
-interface Vm {
-    function envOr(string calldata, uint256) external returns (uint256);
-    function addr(uint256) external returns (address);
-    function startBroadcast(uint256) external;
-    function startBroadcast() external;
-}
-
 /**
  * @title DeployGrantHub
  * @notice Deploys GrantPoolFactory (one per network).
@@ -80,11 +48,12 @@ interface Vm {
  *       --sig "run(address)" 0x3600000000000000000000000000000000000000
  */
 contract DeployGrantHub is Script {
+    address constant ARC_USDC = 0x3600000000000000000000000000000000000000;
     address constant FOUNDRY_DEFAULT_SENDER =
         0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
 
     function run(address usdc) external {
-        require(usdc != address(0), "DeployGrantHub: usdc cannot be zero");
+        require(usdc == ARC_USDC, "DeployGrantHub: unexpected Arc USDC");
         require(
             block.chainid == 5042002 || block.chainid == 5042,
             "DeployGrantHub: must deploy on Arc Testnet (5042002) or Arc Mainnet (5042)"
@@ -95,17 +64,17 @@ contract DeployGrantHub is Script {
         // Resolve deployer — supports raw key (testnet) or external signer (mainnet)
         uint256 key = vm.envOr("PRIVATE_KEY", uint256(0));
         if (isMainnet) {
-            require(key == 0, "DeployGrantHub: do not use PRIVATE_KEY on mainnet — use --ledger or --account");
+            require(key == 0, "DeployGrantHub: do not use PRIVATE_KEY on mainnet - use --ledger or --account");
         }
 
         address deployer;
         if (key != 0) {
             deployer = vm.addr(key);
         } else {
-            deployer = msg.sender;
+            deployer = tx.origin;
         }
         require(deployer != FOUNDRY_DEFAULT_SENDER,
-            "DeployGrantHub: no signer — pass --ledger, --account, or set PRIVATE_KEY");
+            "DeployGrantHub: no signer - pass --ledger, --account, or set PRIVATE_KEY");
 
         console2.log("=== DeployGrantHub ===");
         console2.log("Chain ID:         ", block.chainid);
@@ -154,6 +123,7 @@ contract DeployGrantHub is Script {
  * Transfer to a Gnosis Safe immediately after for production use.
  */
 contract DeployOrgPool is Script {
+    address constant ARC_USDC = 0x3600000000000000000000000000000000000000;
     address constant FOUNDRY_DEFAULT_SENDER =
         0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
 
@@ -163,7 +133,7 @@ contract DeployOrgPool is Script {
         address treasury,
         bytes32 salt
     ) external {
-        require(usdc    != address(0), "DeployOrgPool: usdc zero");
+        require(usdc    == ARC_USDC, "DeployOrgPool: unexpected Arc USDC");
         require(factory != address(0), "DeployOrgPool: factory zero");
         require(treasury != address(0), "DeployOrgPool: treasury zero");
         require(
@@ -175,12 +145,12 @@ contract DeployOrgPool is Script {
 
         uint256 key = vm.envOr("PRIVATE_KEY", uint256(0));
         if (isMainnet) {
-            require(key == 0, "DeployOrgPool: do not use PRIVATE_KEY on mainnet — use --ledger or --account");
+            require(key == 0, "DeployOrgPool: do not use PRIVATE_KEY on mainnet - use --ledger or --account");
         }
 
-        address deployer = (key != 0) ? vm.addr(key) : msg.sender;
+        address deployer = (key != 0) ? vm.addr(key) : tx.origin;
         require(deployer != FOUNDRY_DEFAULT_SENDER,
-            "DeployOrgPool: no signer — pass --ledger, --account, or set PRIVATE_KEY");
+            "DeployOrgPool: no signer - pass --ledger, --account, or set PRIVATE_KEY");
 
         console2.log("=== DeployOrgPool ===");
         console2.log("Chain ID:              ", block.chainid);
@@ -215,9 +185,9 @@ contract DeployOrgPool is Script {
 
         console2.log("--- NEXT STEPS ---");
         console2.log("1. Record pool + vesting addresses in AGENTS.md");
-        console2.log("2. Transfer pool ownership to a Gnosis Safe:");
-        console2.log("   cast send <POOL> 'transferOwnership(address)' <SAFE> --rpc-url arc_mainnet --account vestros-deployer");
-        console2.log("3. Call acceptOwnership() from the Safe");
-        console2.log("4. Enable VITE_GRANTHUB_FINANCIAL=true in .env once audit is complete");
+        console2.log("2. GrantPool uses Ownable: transfer ownership once to the approved Safe");
+        console2.log("   cast send <POOL> 'transferOwnership(address)' <SAFE> --rpc-url arc_testnet --account vestros-deployer");
+        console2.log("3. Verify pool.owner() equals the approved Safe; there is no acceptOwnership() step");
+        console2.log("4. Keep GrantHub financial flags disabled until the authorized rehearsal");
     }
 }

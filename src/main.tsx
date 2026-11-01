@@ -21,6 +21,8 @@ import { ConnectKitProvider } from 'connectkit'
 import { Toaster } from 'sonner'
 import { config } from './config'
 import App from './App'
+import { AuthProvider } from './granthub/useAuth'
+import { ProfilePreferencesProvider } from './features/profile/ProfilePreferences'
 import './index.css'
 
 const queryClient = new QueryClient()
@@ -71,9 +73,13 @@ createRoot(document.getElementById('root')!).render(
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <ConnectKitProvider>
-          <App />
-          <StudioWatermark />
-          <Toaster position="top-center" />
+          <AuthProvider>
+            <ProfilePreferencesProvider>
+              <App />
+            </ProfilePreferencesProvider>
+            <StudioWatermark />
+            <Toaster position="top-center" />
+          </AuthProvider>
         </ConnectKitProvider>
       </QueryClientProvider>
     </WagmiProvider>

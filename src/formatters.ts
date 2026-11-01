@@ -1,8 +1,8 @@
 // Shared display helpers
 import { Amount, usdcDecimalsFor } from '@/onchain-money'
-import { arcTestnet } from 'viem/chains'
+import { CHAIN_ID } from '@/contractConfig'
 
-const USDC_DECIMALS = usdcDecimalsFor(arcTestnet.id)
+const USDC_DECIMALS = usdcDecimalsFor(CHAIN_ID)
 
 export function fmtUsdc(raw: bigint | undefined, places = 2): string {
   if (raw === undefined) return '—'

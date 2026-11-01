@@ -99,13 +99,13 @@ contract GrantVesting is Ownable, Pausable, ReentrancyGuard {
         emit Claimed(scheduleId, schedule.beneficiary, claimable);
     }
 
-    function revoke(uint256 scheduleId) external onlyOwner whenNotPaused nonReentrant {
+    function revoke(uint256 scheduleId) external onlyOwner whenNotPaused nonReentrant returns (uint256 unvested) {
         Schedule storage schedule = _getSchedule(scheduleId);
         if (schedule.revoked) revert AlreadyRevoked();
 
         uint48 revokeTime = uint48(block.timestamp);
         uint256 vestedAtRevoke = _vestedAmountAt(schedule, revokeTime);
-        uint256 unvested = schedule.totalAmount - vestedAtRevoke;
+        unvested = schedule.totalAmount - vestedAtRevoke;
 
         schedule.revoked = true;
         schedule.revokeTime = revokeTime;

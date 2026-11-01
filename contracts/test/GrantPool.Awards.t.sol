@@ -264,6 +264,22 @@ contract GrantPoolAwardsTest is GrantPoolTestBase {
         pool2.activateAward(0);
     }
 
+    function test_ActivateAward_Revert_DurationOverflow() public {
+        _aliceDeposit(INITIAL_DEPOSIT);
+        vm.prank(owner);
+        pool.createAward(alice, AWARD_AMOUNT, 1, type(uint32).max);
+
+        vm.prank(owner);
+        vm.expectRevert(GrantPool.DurationOverflow.selector);
+        pool.activateAward(0);
+
+        (, , , , , bool activated, bool cancelled) = pool.awards(0);
+        assertFalse(activated);
+        assertFalse(cancelled);
+        assertEq(pool.committedBalance(), AWARD_AMOUNT);
+        assertEq(usdc.balanceOf(address(pool)), pool.confirmedBalance() + pool.committedBalance());
+    }
+
     function test_ActivateAward_HappyPath_VestingScheduleCreated() public {
         _aliceDeposit(INITIAL_DEPOSIT);
         _createAward(alice, AWARD_AMOUNT);
@@ -277,6 +293,23 @@ contract GrantPoolAwardsTest is GrantPoolTestBase {
     }
 
     // ════════════════════════════════════════════════════════════════════════════
+    function test_RevokeVestingSchedule_RestoresUnvestedToConfirmedBalance() public {
+        _aliceDeposit(INITIAL_DEPOSIT);
+        _createAward(alice, AWARD_AMOUNT);
+        vm.prank(owner);
+        pool.activateAward(0);
+
+        vm.warp(block.timestamp + 100 days);
+        uint256 vestedAtRevoke = grantVesting.vestedAmount(0);
+        uint256 expectedReturned = AWARD_AMOUNT - vestedAtRevoke;
+
+        vm.prank(owner);
+        pool.revokeVestingSchedule(0);
+
+        assertEq(pool.confirmedBalance(), INITIAL_DEPOSIT - AWARD_AMOUNT + expectedReturned);
+        assertEq(usdc.balanceOf(address(pool)), pool.confirmedBalance() + pool.committedBalance());
+    }
+
     // cancelAward
     // ════════════════════════════════════════════════════════════════════════════
 

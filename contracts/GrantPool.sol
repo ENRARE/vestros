@@ -157,7 +157,11 @@ contract GrantPool is Pausable, ReentrancyGuard, Ownable {
             award.beneficiary,
             award.amount,
             uint48(block.timestamp),
+            // The duration is bounded immediately above.
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint48(cliffDuration),
+            // The duration is bounded immediately above.
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint48(vestingDuration)
         ) returns (uint256 createdScheduleId) {
             vestingScheduleId = createdScheduleId;
@@ -227,7 +231,8 @@ contract GrantPool is Pausable, ReentrancyGuard, Ownable {
     function revokeVestingSchedule(uint256 scheduleId) external onlyOwner whenNotPaused {
         address vestingContract = grantVesting;
         if (vestingContract == address(0)) revert GrantVestingNotSet();
-        GrantVesting(vestingContract).revoke(scheduleId);
+        uint256 returned = GrantVesting(vestingContract).revoke(scheduleId);
+        if (returned > 0) confirmedBalance += returned;
     }
 
     /// @notice Pause the configured GrantVesting contract. Emergency use only.

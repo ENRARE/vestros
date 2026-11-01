@@ -24,6 +24,16 @@ export interface Organization {
   grant_count?: number
 }
 
+export interface GrantHubProfile {
+  address: string
+  display_name?: string
+  bio?: string
+  github?: string
+  portfolio?: string
+  skills?: string[]
+  team?: string[]
+}
+
 // ── Grant Program ─────────────────────────────────────────────────────────────
 
 export interface GrantProgram {
@@ -37,6 +47,10 @@ export interface GrantProgram {
   goals?: string
   eligibility?: string
   requirements: string
+  funding_terms?: string
+  deliverables?: string
+  custom_questions?: CustomQuestion[]
+  allow_multiple_applications?: boolean
   faqs?: unknown[]
   tags?: string[]              // frontend convenience field
   category: string
@@ -44,7 +58,7 @@ export interface GrantProgram {
   declared_budget?: number
   total_budget?: string        // fmtGrant alias for declared_budget
   min_award?: number
-  max_award?: string           // fmtGrant alias
+  max_award?: string | number  // fmtGrant alias
   status: GrantStatus
   deadline?: number | null
   close_date?: number | null   // alias for deadline in frontend forms
@@ -56,6 +70,8 @@ export interface GrantProgram {
   vesting_days?: number        // alias
   revocable?: boolean
   confirmed_funded?: string    // confirmed onchain deposit total (string from backend)
+  pool_contract_address?: string | null
+  pool_chain_id?: number | null
   created_at: number
   updated_at: number
   applicant_count?: number
@@ -80,12 +96,28 @@ export interface GrantApplication {
   org_id?: string
   org_name?: string
   applicant_addr: string
+  applicant_name?: string
+  email?: string
+  country?: string
+  applicant_type?: 'individual' | 'team'
+  github_url?: string
+  portfolio_url?: string
   project_name: string
   project_title?: string       // alias
   summary: string
   description?: string         // alias for summary in some UI
   problem: string
   solution: string
+  project_category?: string
+  development_stage?: string
+  tech_stack?: string
+  ecosystem_benefit?: string
+  use_of_funds?: string
+  budget_breakdown?: string
+  completion_date?: number | null
+  previous_experience?: string
+  custom_answers?: Record<string, string>
+  attachments?: Array<{ name: string; url: string }>
   milestones: Milestone[]
   requested_raw: number        // raw USDC (6 dec)
   requested_amount?: string    // formatted alias
@@ -99,6 +131,7 @@ export interface GrantApplication {
   bio?: string                 // alias from profile
   review_count?: number
   avg_score?: number | null
+  viewer_role?: 'admin' | 'reviewer'
 }
 
 // ── Review ────────────────────────────────────────────────────────────────────
@@ -110,7 +143,9 @@ export interface ReviewDecision {
   score: number | null
   comment?: string
   notes?: string                // alias for comment
-  decision: 'shortlist' | 'approve' | 'reject' | 'note' | null
+  decision: 'shortlist' | 'request_info' | 'approve' | 'reject' | 'note' | null
+  criteria_scores?: Record<string, number>
+  eligibility_checks?: string[]
   created_at: number
   updated_at: number
 }
@@ -157,6 +192,11 @@ export interface Deposit {
   tx_hash: string | null
   block_number: number | null
   confirmed: boolean
+  verified: boolean
+  verified_chain_id?: number | null
+  verified_pool_contract_address?: string | null
+  verified_token_address?: string | null
+  verified_at?: number | null
   deposited_at: number
 }
 
@@ -173,6 +213,21 @@ export interface ListGrantsParams {
 
 export interface ApiError {
   error: string
+}
+
+export interface CustomQuestion {
+  id: string
+  prompt: string
+  required: boolean
+}
+
+export interface GrantNotification {
+  id: string
+  type: string
+  entity_id: string | null
+  message: string
+  read: boolean
+  created_at: number
 }
 
 // ── Convenience constants ─────────────────────────────────────────────────────

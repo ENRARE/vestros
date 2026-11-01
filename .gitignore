@@ -1,6 +1,13 @@
 .env
 .env.*
+!.env.example
 .circle/
 *recovery*
 node_modules/
 dist/
+broadcast/
+.granthub.db
+.granthub.db-shm
+.granthub.db-wal
+contracts/out/
+contracts/cache/

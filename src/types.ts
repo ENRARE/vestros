@@ -1,4 +1,5 @@
 // Shared Vestros types — do not import from App.tsx
+import type { DurationUnit } from './vestingDuration'
 
 export interface VestingSchedule {
   beneficiary: string
@@ -26,8 +27,10 @@ export interface BulkEntry {
   id: string
   beneficiary: string
   amount: string          // decimal USDC string
-  cliffDays: string
-  vestingDays: string
+  cliffValue: string
+  cliffUnit: DurationUnit
+  vestingValue: string
+  vestingUnit: DurationUnit
   error?: string
 }
 

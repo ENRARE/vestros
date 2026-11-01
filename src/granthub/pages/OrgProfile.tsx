@@ -39,7 +39,7 @@ export function OrgProfile() {
   )
   if (err || !org) return (
     <div className="text-center py-24" style={{ color: 'var(--danger)' }}>
-      {err ?? 'Organization not found'}
+      {err ?? 'Organisation not found'}
     </div>
   )
 
@@ -47,7 +47,7 @@ export function OrgProfile() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
-      <Link to="/grants" className="inline-flex items-center gap-1.5 text-sm mb-6" style={{ color: 'var(--muted)' }}>
+      <Link to="/granthub" className="inline-flex items-center gap-1.5 text-sm mb-6" style={{ color: 'var(--muted)' }}>
         <ArrowLeft size={14} /> All Grants
       </Link>
 
@@ -99,7 +99,7 @@ export function OrgProfile() {
         Active Grants ({grants.length})
       </h2>
       {grants.length === 0
-        ? <p className="text-sm" style={{ color: 'var(--muted)' }}>No active grants from this organization.</p>
+        ? <p className="text-sm" style={{ color: 'var(--muted)' }}>No active grants from this organisation.</p>
         : <div className="flex flex-col gap-3">
             {grants.map(g => <GrantCard key={g.id} grant={g} />)}
           </div>

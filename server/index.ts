@@ -7,6 +7,10 @@ import { handleGrants } from './routes/grants'
 import { handleOrgs } from './routes/orgs'
 import { handleApplications } from './routes/applications'
 import { handleAwards } from './routes/awards'
+import { handleNotifications } from './routes/notifications'
+import { handleVestingActivity } from './routes/vestingActivity'
+import { handleArcRpc } from './arcRpcProxy'
+import { runVestingIndexerOnce } from './vestingIndexer'
 
 const PORT = 3001
 
@@ -26,11 +30,14 @@ Bun.serve({
     let res: Response | null = null
 
     try {
-      res = await handleAuth(req, url)
+      res = await handleArcRpc(req, url)
+        ?? handleVestingActivity(req, url)
+        ?? await handleAuth(req, url)
         ?? await handleGrants(req, url)
         ?? await handleOrgs(req, url)
         ?? await handleApplications(req, url)
         ?? await handleAwards(req, url)
+        ?? handleNotifications(req, url)
     } catch (err) {
       console.error('[API error]', err)
       res = Response.json({ error: 'Internal server error' }, { status: 500 })
@@ -46,3 +53,15 @@ Bun.serve({
 })
 
 console.log(`GrantHub API listening on port ${PORT}`)
+
+const indexerEnabled = process.env.VESTING_INDEXER_ENABLED !== 'false'
+const indexerPollMs = Math.max(30_000, Number(process.env.VESTING_INDEXER_POLL_MS ?? 120_000))
+if (indexerEnabled) {
+  const runIndexer = () => {
+    void runVestingIndexerOnce().then(result => {
+      if (result.error) console.error('[vesting indexer]', result.error)
+    })
+  }
+  runIndexer()
+  setInterval(runIndexer, indexerPollMs)
+}

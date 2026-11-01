@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { createRequire } from 'node:module';
 
 import {
   initiateDeveloperControlledWalletsClient,
@@ -11,7 +12,6 @@ import {
   type Blockchain as ScpBlockchain,
   type CircleSmartContractPlatformClient,
 } from '@circle-fin/smart-contract-platform';
-import { getChain } from '@circlefin/compass-chains';
 import { type Abi, type Hex, createPublicClient, createWalletClient, encodeFunctionData, http, keccak256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -55,6 +55,30 @@ interface ChainConfig {
   gasToken: 'usdc' | 'native';
 }
 
+interface CompassChainDefinition {
+  name: string;
+  explorerUrl?: string;
+  nativeCurrency: { symbol: string };
+}
+
+type CompassChainsModule = {
+  getChain: (chainId: string) => CompassChainDefinition;
+};
+
+const require = createRequire(import.meta.url);
+
+function getCompassChain(chainId: string): CompassChainDefinition {
+  try {
+    const compassChains = require('@circlefin/compass-chains') as CompassChainsModule;
+    return compassChains.getChain(chainId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Compass chain metadata is unavailable. Install the Compass deployment runtime or use the Foundry deploy script. (${message})`,
+    );
+  }
+}
+
 const ACTIVE_CHAIN: ChainConfig = {
   circleBlockchain: '',
   compassChain: '',
@@ -63,9 +87,9 @@ const ACTIVE_CHAIN: ChainConfig = {
   gasToken: 'native',
 };
 
-function resolveChainDef(compassChain: string): ReturnType<typeof getChain> {
+function resolveChainDef(compassChain: string): CompassChainDefinition {
   try {
-    return getChain(compassChain);
+    return getCompassChain(compassChain);
   } catch {
     throw new Error(`Unknown --compass-chain "${compassChain}". Expected a Compass chain id (e.g. Arc_Testnet, Base_Sepolia).`);
   }
