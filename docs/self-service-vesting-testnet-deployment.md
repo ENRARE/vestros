@@ -9,11 +9,12 @@ operations remain disabled.
 | Environment | Chain ID | USDC | Factory configuration |
 |---|---:|---|---|
 | Arc Testnet | `5042002` | `0x3600000000000000000000000000000000000000` | `0xd5E874489038D9FBA47F1669980EC885eBaE17BF` |
-| Arc Mainnet | `5042` | `0x3600000000000000000000000000000000000000` | `VITE_VESTING_FACTORY_MAINNET` (blank; never falls back to Testnet) |
+| Arc Mainnet | `5042` | `0x3600000000000000000000000000000000000000` | `0xa9a60e3a9e46590CFcfa345c8F0e8b1E9039dc4d` (deployed; approval gates remain) |
 
 USDC uses 6 decimals on both configured Arc networks. The Mainnet factory
-address must be populated only after an independently verified Mainnet
-broadcast; the Testnet address must never be copied into Mainnet configuration.
+address above is public deployment evidence; its approved runtime fingerprint
+and independent security review remain outstanding. The Testnet address must
+never be copied into Mainnet configuration.
 
 ## Testnet deployment order
 
@@ -50,8 +51,9 @@ USDC address, `vaultCount()` is `0`, and `vaultOf(deployer)` is the zero
 address. The factory has no `owner()` function or privileged administration
 path.
 
-The local Vite Testnet configuration now points to the verified factory. The
-Mainnet factory setting remains blank.
+The local Vite configuration preserves the Testnet values and now selects the
+live Mainnet factory only when `VITE_CHAIN_ENV=mainnet`. The legacy Mainnet
+`USDCVesting` address remains blank.
 
 ## Simulation command
 
@@ -81,8 +83,9 @@ chain ID, nonce, balance, bytecode, and gas estimate immediately beforehand.
 - A second `createVault()` from the same creator reverts.
 - A different creator receives a different vault and cannot call the first
   vault's owner-only functions.
-- Frontend and backend configuration contain no Mainnet factory address until
-  Mainnet deployment and verification are separately approved.
+- Mainnet factory configuration is separate from Testnet and does not fall
+  back across environments; the approved runtime hash remains blank until
+  independent artifact/security review is complete.
 
 ## Security boundary
 

@@ -1,6 +1,6 @@
 # Arc Mainnet Readiness
 
-Status: **BLOCKED — predeployment only**
+Status: **BLOCKED - postdeployment release gates remain**
 
 This report covers the read-only hardening work performed in this workspace. It
 does not constitute an independent security audit, deployment authorization, or
@@ -11,9 +11,11 @@ approval to broadcast a transaction.
 The minimum intended Core release is the self-service `VestingFactory` plus
 factory-created `SelfServiceVesting` vaults. Legacy `USDCVesting` remains an
 optional compatibility component and is not required for the factory-only
-release. The frontend correctly fails closed while the selected Mainnet
-deployment addresses are blank. Independent contract review and a controlled
-postdeployment smoke test are also outstanding.
+release. The live factory-only Mainnet deployment is now configured for
+read-only frontend use. The legacy USDCVesting Mainnet address remains blank
+by design. Independent contract review, source verification, approved runtime
+fingerprint registration, and a controlled postdeployment smoke test remain
+outstanding.
 
 GrantHub Mainnet is a separate **NO-GO**. Its financial flags remain disabled,
 no Mainnet GrantHub deployment is configured, and backend-dependent GrantHub
@@ -40,26 +42,67 @@ features must not be represented as available without the backend.
   Solidity sources. The timestamp rule retains the existing 60-second wallet
   confirmation buffer; it is not a substitute for a finality policy.
 
+## Live Mainnet factory evidence
+
+The following evidence was reproduced with read-only calls against Arc
+Mainnet (`5042`). No vault was created and no USDC transaction was submitted.
+
+| Check | Result |
+|---|---|
+| Factory | `0xa9a60e3a9e46590CFcfa345c8F0e8b1E9039dc4d` |
+| Deployment transaction | `0x6891201cecc547d173eda6cac3833c9be7feac77b83130e8cdb5bc4b88eae9f2` |
+| Deployment block | `29044281` |
+| Receipt status | `1` (success) |
+| Transaction chain ID | `5042` |
+| Constructor argument | canonical USDC `0x3600000000000000000000000000000000000000` |
+| Factory `usdc()` | canonical USDC; PASS |
+| Factory `vaultCount()` | `0`; PASS, no vault creation performed |
+| Artifact compiler settings | Solidity `0.8.28`, EVM `paris`, optimizer `200`; PASS |
+| Runtime comparison | exact byte-for-byte match after replacing the artifact immutable slot with canonical USDC; metadata retained; PASS |
+| Observed runtime hash | `0x5218d09a75d9030f8fcca6ca9336a93a9bbcb8cad911a302644e3f59658934d7` |
+| Approved fingerprint | NOT VERIFIED; the observed hash is not treated as independent approval |
+| Explorer source verification | NOT VERIFIED; the Arc Explorer verification surface currently reports source submission unavailable, and no verification receipt exists |
+
+The creation input also matches the compiled creation artifact prefix and ends
+with the expected 32-byte USDC constructor argument. This is deployment
+evidence, not an independent security audit.
+
+## Explorer verification preparation
+
+No redeployment is needed for source verification. The prepared verification
+inputs are:
+
+- Contract: `VestingFactory`
+- Address: `0xa9a60e3a9e46590CFcfa345c8F0e8b1E9039dc4d`
+- Compiler: `v0.8.28` (`0.8.28+commit.7893614a`)
+- EVM: `paris`
+- Optimizer: enabled, `200` runs
+- Constructor argument: `0x3600000000000000000000000000000000000000`
+- Source entrypoint: `contracts/VestingFactory.sol:VestingFactory`
+
+The Arc Mainnet explorer contract page should be used to submit these exact
+inputs if/when it exposes a Verify/Publish action. The current verification
+surface reports that source submission is unavailable, and this audit did not
+receive a verification receipt. Source verification therefore remains
+`NOT VERIFIED`.
+
 ## Read-only preflight command
 
 ```bash
 npm run ops:mainnet-preflight
 ```
 
-With the current configuration this must report `BLOCKED` because:
+With the current configuration this must report `NOT VERIFIED` because:
 
-- `MAINNET_RELEASE_COMPONENTS` is not explicitly selected;
-- the selected Mainnet component address is blank; and/or
-- the approved runtime hash for the selected component is blank.
+- the approved runtime hash for the selected factory component is blank.
 
-For the minimum release, set the operator-only preflight scope to
+The minimum-release operator scope is already set to
 `MAINNET_RELEASE_COMPONENTS=factory`. Do not populate a legacy Core address
 unless that compatibility component is separately approved.
 
-After a separately authorized deployment, an operator must populate the
-network-specific public addresses and reviewed runtime hashes, then rerun the
-command against an RPC that reports chain ID `5042`. No private key belongs in
-the frontend or in these environment variables.
+After independent review, an operator may populate the public approved runtime
+hash and rerun the command against an RPC that reports chain ID `5042`. No
+private key belongs in the frontend or in these environment variables.
 
 ## Readiness matrix
 
@@ -68,22 +111,24 @@ the frontend or in these environment variables.
 | Arc Mainnet chain isolation | PASS | Configuration selects `5042` independently; no Testnet fallback. |
 | Canonical Mainnet USDC | PASS | Network facts and deployment guards require `0x3600000000000000000000000000000000000000`. |
 | Mainnet Core deployment | NOT APPLICABLE for factory-only scope | Legacy `USDCVesting` is optional compatibility functionality and is not required by the self-service release. |
-| Mainnet factory deployment | BLOCKED | No Mainnet `VestingFactory` address is configured or deployed by this audit. |
-| Mainnet bytecode approval | NOT VERIFIED | Requires observed postdeployment runtime hashes and independent artifact review. |
-| Mainnet ownership/configuration | NOT VERIFIED | Factory `usdc()` and factory-created vault owner checks remain required; legacy `owner()` is required only when `legacy` is selected. |
-| Mainnet RPC | PASS | `cast chain-id` returned `5042`; `cast block-number` returned `29021861`; canonical USDC code, `decimals() = 6`, and `symbol() = USDC` were read successfully. |
+| Mainnet factory deployment | PASS | Receipt status `1`, factory `0xa9a60e3a9e46590CFcfa345c8F0e8b1E9039dc4d`, block `29044281`, tx `0x6891201cecc547d173eda6cac3833c9be7feac77b83130e8cdb5bc4b88eae9f2`. |
+| Mainnet bytecode comparison | PASS | Live runtime exactly matches the compiled `VestingFactory` artifact after immutable substitution, including metadata. |
+| Mainnet bytecode approval | NOT VERIFIED | Observed hash is recorded, but independent security/artifact approval has not been granted. |
+| Mainnet ownership/configuration | PASS for factory reads | `factory.usdc()` matches canonical USDC and `vaultCount()` is `0`; vault-owner behavior still requires a separately approved postdeployment vault rehearsal. |
+| Mainnet RPC | PASS | Chain ID `5042`; factory bytecode, `usdc()`, and `vaultCount()` read successfully. |
 | Wallet/signing protections | PASS | Mainnet deployment scripts reject raw `PRIVATE_KEY` and default Foundry sender. |
 | Core contract regression suite | PASS | `forge test`: 191 tests passed, 0 failed, including 256-run invariant suites. |
-| Frontend Mainnet unavailable state | PASS | Blank Mainnet addresses disable Core writes and show configuration-unavailable UI. |
+| Frontend Mainnet factory configuration | PASS with release gates | Factory address and deployment tx are configured; legacy Mainnet Core remains blank and the approved runtime hash remains blank. |
 | Browser wallet QA | NOT VERIFIED | No browser session was used during this audit. |
 | Local receipt history | NOT VERIFIED | Testnet lifecycle is covered by prior evidence; Mainnet has no receipts yet. |
 | Treasury/Analytics completeness | BLOCKED | Owner-wide historical completeness still requires indexed coverage; no Mainnet history exists. |
 | GrantHub Mainnet | BLOCKED | No deployment, financial flags disabled, independent review and operational rehearsal outstanding. |
 | Independent security audit | BLOCKED | No third-party audit has been completed for the release candidate. |
 
-The Mainnet RPC PASS is limited to network and canonical-token reads. Selected
-application bytecode/configuration checks remain blocked until the approved
-release scope, addresses, and runtime hashes are supplied.
+The Mainnet RPC and factory checks pass. The release remains blocked because
+the approved runtime hash is intentionally blank pending independent review,
+source verification is not confirmed, and browser/postdeployment acceptance
+has not been completed.
 
 ## Contract review findings
 

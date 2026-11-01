@@ -36,6 +36,8 @@ bun install
 | `VITE_CHAIN_ENV` | `testnet` (default) or `mainnet`; selects the active Arc network |
 | `VITE_USDC_VESTING_CONTRACT_TESTNET` | USDCVesting address on Arc Testnet |
 | `VITE_USDC_VESTING_CONTRACT_MAINNET` | USDCVesting address on Arc Mainnet; leave unset until deployed and verified |
+| `VITE_VESTING_FACTORY_TESTNET` / `_MAINNET` | Network-specific self-service factory addresses |
+| `VITE_VESTING_FACTORY_DEPLOY_TX_TESTNET` / `_MAINNET` | Public factory deployment receipts for discovery/verification |
 | `VITE_USDC_VESTING_DEPLOY_TX_TESTNET` / `_MAINNET` | Deployment transaction used by the event indexer for the selected network |
 | `VITE_GRANTHUB_FINANCIAL` | Frontend financial-feature flag; default `false` |
 | `GRANTHUB_FINANCIAL_ENABLED` | Server authorization flag; default `false`, and must be explicitly enabled only after review |
@@ -76,6 +78,7 @@ bun run build
 | Network | Contract | Address | Explorer |
 |---|---|---|---|
 | Arc Testnet | USDCVesting (active) | `0x8eae0cf6a7f8f8b6961315006c05ded1da8d8693` | [Explorer](https://explorer.testnet.arc.io/address/0x8eae0cf6a7f8f8b6961315006c05ded1da8d8693) |
+| Arc Mainnet | VestingFactory | `0xa9a60e3a9e46590CFcfa345c8F0e8b1E9039dc4d` | [Explorer](https://explorer.arc.io/address/0xa9a60e3a9e46590CFcfa345c8F0e8b1E9039dc4d) |
 | Arc Mainnet | USDCVesting | Not deployed | — |
 
 The Arc ERC-20 USDC address is `0x3600000000000000000000000000000000000000` on both networks and uses 6 decimals. Arc's native gas token is also USDC, but uses 18 decimals. The first Arc Testnet GrantPool and GrantVesting deployment is recorded in [the Testnet deployment runbook](docs/granthub-testnet-deployment.md); ownership transfer, funding, and the financial rehearsal remain separately gated.

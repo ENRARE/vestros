@@ -35,9 +35,9 @@ export function LandingPage() {
           <section className="landing-hero landing-hero-band" aria-labelledby="landing-title">
             <div className="landing-hero-content">
               <div className="landing-kicker"><span className="landing-kicker-mark" /> Financial infrastructure for teams and ecosystems</div>
-              <h1 id="landing-title" className="landing-title display">Vesting and grants, kept clear.</h1>
+              <h1 id="landing-title" className="landing-title display">USDC vesting, made simple.</h1>
               <p className="landing-description">
-                Vestros gives teams a precise operating layer for USDC vesting, treasury visibility, and GrantHub workflows on Arc.
+                Create vesting schedules, allocate USDC, and let beneficiaries claim their funds over time. Built on Arc.
               </p>
               <div className="landing-actions">
                 <Link to={APP_PATH} className="landing-button landing-button-primary">
