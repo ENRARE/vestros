@@ -13,10 +13,12 @@ import { computeVested, getStatus } from '@/vestingMath'
 import { MetricTile, SectionHeader, EmptyState, MiniProgressBar, Card, IndexerBanner } from '@/components/ui/Primitives'
 import { useVestingEvents } from '@/hooks/useVestingEvents'
 import { useChainTime } from '@/hooks/useChainTime'
+import type { ScheduleRef } from '@/hooks/useVestingEvents'
 import type { VestingSchedule, TreasuryMetrics } from '@/types'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface ScheduleSummary {
+  vaultAddress: string
   id: bigint
   schedule: VestingSchedule
   vested: bigint
@@ -27,22 +29,23 @@ interface ScheduleSummary {
 // Reads all schedules from the contract given a list of IDs from the event index.
 // chainNow: live block timestamp from useChainTime, passed in from the parent
 // so all components share the same reference time.
-function useAllSchedules(scheduleIds: bigint[], chainNow: number) {
-  const calls = scheduleIds.map(id => ({
+function useAllSchedules(scheduleRefs: ScheduleRef[], chainNow: number) {
+  const calls = scheduleRefs.map(ref => ({
     ...CONTRACT,
+    address: ref.vaultAddress,
     functionName: 'getSchedule' as const,
-    args: [id] as const,
+    args: [ref.scheduleId] as const,
   }))
 
   const { data, isLoading, refetch } = useReadContracts({
     contracts: calls,
-    query: { enabled: scheduleIds.length > 0 },
+    query: { enabled: scheduleRefs.length > 0 },
   })
 
   const schedules: ScheduleSummary[] = useMemo(() => {
     if (!data) return []
     const result: ScheduleSummary[] = []
-    for (let i = 0; i < scheduleIds.length; i++) {
+    for (let i = 0; i < scheduleRefs.length; i++) {
       const r = data[i]
       if (r?.status === 'success' && r.result) {
         const s = r.result as unknown as VestingSchedule
@@ -50,11 +53,11 @@ function useAllSchedules(scheduleIds: bigint[], chainNow: number) {
         const vested = computeVested(s, chainNow)
         // Guard against underflow if claimedAmount > vested
         const claimable = vested > s.claimedAmount ? vested - s.claimedAmount : 0n
-        result.push({ id: scheduleIds[i], schedule: s, vested, claimable })
+        result.push({ vaultAddress: scheduleRefs[i].vaultAddress, id: scheduleRefs[i].scheduleId, schedule: s, vested, claimable })
       }
     }
     return result
-  }, [data, chainNow, scheduleIds])
+  }, [data, chainNow, scheduleRefs])
 
   return { schedules, isLoading, refetch }
 }
@@ -133,11 +136,12 @@ function BeneficiaryRow({ addr, summaries, chainNow }: { addr: string; summaries
       </button>
       {expanded && (
         <div className="px-4 pb-3 flex flex-col gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
-          {summaries.map(({ id, schedule: s }) => {
+          {summaries.map(({ id, vaultAddress, schedule: s }) => {
             const status = getStatus(s, chainNow)
             return (
-              <div key={id.toString()} className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs" style={{ background: 'var(--surface-muted)' }}>
+              <div key={`${vaultAddress}-${id.toString()}`} className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs" style={{ background: 'var(--surface-muted)' }}>
                 <span className="font-medium" style={{ color: 'var(--subtle)' }}>#{id.toString()}</span>
+                <span className="mono" style={{ color: 'var(--subtle)' }}>{fmtAddr(vaultAddress)}</span>
                 <span className="flex-1 tabular-nums font-semibold" style={{ color: 'var(--ink-2)' }}>{fmtUsdc(s.totalAmount)} USDC</span>
                 <span style={{ color: status === 'revoked' ? 'var(--danger)' : status === 'fully_vested' ? 'var(--success)' : 'var(--muted)' }}>
                   {status.replace('_', ' ')}
@@ -172,7 +176,9 @@ function EventRow({ log }: { log: import('@/hooks/useVestingEvents').EventLog })
       <div className="flex-1 min-w-0 text-xs">
         <span className="font-semibold" style={{ color: 'var(--ink-2)' }}>{label}</span>
         <span className="ml-1 mono" style={{ color: 'var(--subtle)' }}>#{log.scheduleId.toString()}</span>
+        <span className="ml-1 mono" style={{ color: 'var(--subtle)' }}>{fmtAddr(log.vaultAddress)}</span>
         <span className="ml-1" style={{ color: 'var(--muted)' }}>{fmtAddr(log.beneficiary)}</span>
+        <span className="ml-1" style={{ color: 'var(--subtle)' }}>{log.timestamp === undefined ? `block ${log.blockNumber.toString()}` : fmtTimestamp(Number(log.timestamp))}</span>
       </div>
       <span className="text-xs font-semibold tabular-nums shrink-0" style={{ color: 'var(--ink-2)' }}>{fmtUsdc(log.amount)}</span>
       {log.txHash && (
@@ -189,10 +195,11 @@ function EventRow({ log }: { log: import('@/hooks/useVestingEvents').EventLog })
 // timestamp used for displayed calculations.
 function exportCsv(summaries: ScheduleSummary[], chainNow: number) {
   const rows = [
-    ['scheduleId', 'beneficiary', 'status', 'totalAmount', 'claimedAmount', 'vestedAmount', 'claimableAmount', 'startDate', 'cliffDate', 'endDate'].join(','),
-    ...summaries.map(({ id, schedule: s, vested, claimable }) => {
+    ['vaultAddress', 'scheduleId', 'beneficiary', 'status', 'totalAmount', 'claimedAmount', 'vestedAmount', 'claimableAmount', 'startDate', 'cliffDate', 'endDate'].join(','),
+    ...summaries.map(({ vaultAddress, id, schedule: s, vested, claimable }) => {
       const status = getStatus(s, chainNow)
       return [
+        vaultAddress,
         id.toString(),
         s.beneficiary,
         status,
@@ -213,7 +220,7 @@ function exportCsv(summaries: ScheduleSummary[], chainNow: number) {
 }
 
 // ─── TreasuryDashboard ───────────────────────────────────────────────────────
-export default function TreasuryDashboard() {
+export default function TreasuryDashboard({ vaultAddress }: { vaultAddress?: string } = {}) {
   const {
     logs, loading: indexLoading, syncing, error: indexError,
     indexedBlock, headBlock, progressPct, refresh,
@@ -223,19 +230,27 @@ export default function TreasuryDashboard() {
   // Live chain time — shared by all vesting calculations in this component
   const chainNow = useChainTime()
 
-  // Collect all unique schedule IDs from events
-  const allScheduleIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const log of logs) {
-      if (log.type === 'created') ids.add(log.scheduleId.toString())
-    }
-    return Array.from(ids).map(id => BigInt(id))
-  }, [logs])
+  const scopedLogs = useMemo(() => {
+    if (!vaultAddress) return logs
+    return logs.filter(log => log.vaultAddress.toLowerCase() === vaultAddress.toLowerCase())
+  }, [logs, vaultAddress])
 
-  const { schedules, isLoading: schedulesLoading, refetch } = useAllSchedules(allScheduleIds, chainNow)
+  // A schedule id is only unique within its originating vault.
+  const scheduleRefs = useMemo(() => {
+    const refs = new Map<string, ScheduleRef>()
+    for (const log of scopedLogs) {
+      if (log.type !== 'created') continue
+      const key = `${log.vaultAddress.toLowerCase()}:${log.scheduleId.toString()}`
+      refs.set(key, { vaultAddress: log.vaultAddress, scheduleId: log.scheduleId })
+    }
+    return Array.from(refs.values())
+  }, [scopedLogs])
+
+  const { schedules, isLoading: schedulesLoading, refetch } = useAllSchedules(scheduleRefs, chainNow)
   const metrics = useMemo(() => computeMetrics(schedules), [schedules])
 
-  const isLoading = indexLoading || schedulesLoading
+  const isLoading = schedulesLoading || (indexLoading && schedules.length === 0 && !indexError)
+  const hasNoManagedSchedules = !isLoading && schedules.length === 0
 
   // Group schedules by beneficiary
   const byBeneficiarySchedules = useMemo(() => {
@@ -248,12 +263,12 @@ export default function TreasuryDashboard() {
     return map
   }, [schedules])
 
-  const recentLogs = [...logs].reverse().slice(0, 50)
+  const recentLogs = scopedLogs.slice(0, 50)
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'beneficiaries', label: `Team (${metrics.beneficiaryCount})` },
-    { id: 'history', label: `History (${logs.length})` },
+    { id: 'history', label: `History (${scopedLogs.length})` },
   ] as const
 
   return (
@@ -288,6 +303,7 @@ export default function TreasuryDashboard() {
         error={indexError}
         indexedBlock={indexedBlock}
         headBlock={headBlock}
+        onRetry={refresh}
       />
       {syncing && progressPct >= 100 && (
         <div className="rounded-xl px-3 py-2 text-xs flex items-center gap-2"
@@ -317,6 +333,12 @@ export default function TreasuryDashboard() {
                 <div key={i} className="rounded-xl p-4 h-20 animate-pulse" style={{ background: 'var(--surface-muted)' }} />
               ))}
             </div>
+          ) : hasNoManagedSchedules ? (
+            <EmptyState
+              icon={<Users size={22} />}
+              title={indexError ? 'Treasury history is unavailable' : 'No managed schedules'}
+              sub={indexError ? 'Your direct vesting balances remain available. Retry history when the network is ready.' : 'Create a vesting schedule to populate treasury values.'}
+            />
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3">
@@ -350,7 +372,7 @@ export default function TreasuryDashboard() {
               ))}
             </div>
           ) : byBeneficiarySchedules.size === 0 ? (
-            <EmptyState icon={<Users size={24} />} title="No schedules found" sub="Create a vesting schedule to see beneficiaries here." />
+            <EmptyState icon={<Users size={24} />} title={indexError ? 'Treasury history is unavailable' : 'No managed schedules'} sub={indexError ? 'Retry history when the network is ready.' : 'Create a vesting schedule to see beneficiaries here.'} />
           ) : (
             <div>
               {Array.from(byBeneficiarySchedules.entries()).map(([addr, sums]) => (
@@ -371,7 +393,7 @@ export default function TreasuryDashboard() {
               ))}
             </div>
           ) : recentLogs.length === 0 ? (
-            <EmptyState icon={<Clock size={24} />} title="No events yet" sub="On-chain events will appear here." />
+            <EmptyState icon={<Clock size={24} />} title={indexError ? 'History is unavailable' : 'No events yet'} sub={indexError ? 'Retry history when the network is ready.' : 'Verified on-chain events will appear here.'} />
           ) : (
             <div>
               {recentLogs.map((log, i) => (

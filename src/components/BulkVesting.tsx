@@ -18,55 +18,46 @@ import {
   useAccount, useReadContract, useWriteContract,
   useWaitForTransactionReceipt, useSwitchChain,
 } from 'wagmi'
-import { erc20Abi } from 'viem'
+import { erc20Abi, type Abi, type Address } from 'viem'
 import {
   Plus, Trash2, Upload, Play, CheckCircle2, XCircle, Clock,
   Download, Users, RefreshCw, AlertCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { CHAIN_ID, CONTRACT, USDC_ADDRESS, USDC_DECIMALS } from '@/contractConfig'
+import { CHAIN_ID, CONTRACT, CONTRACT_CONFIG_ERROR, CONTRACT_DEPLOYED, USDC_ADDRESS, USDC_DECIMALS } from '@/contractConfig'
 import { buildTxExplorerUrl } from '@/onchain-facts'
 import { parseUnitsExact } from '@/onchain-money'
 import { fmtUsdc, fmtAddr } from '@/formatters'
-import { SectionHeader, Card, EmptyState } from '@/components/ui/Primitives'
+import { Card, EmptyState } from '@/components/ui/Primitives'
 import type { BulkEntry, BulkTxState } from '@/types'
+import { parseBulkCsv } from '@/bulkVestingUtils'
+import { useChainTime } from '@/hooks/useChainTime'
+import { durationToSeconds, scheduleStartFromChainTime, validateDurationPair, validateScheduleTimes } from '@/vestingDuration'
+import { appendLocalVestingRecords, decodeConfirmedVestingReceipt } from '@/features/vesting/transactionJournal'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function uid() { return Math.random().toString(36).slice(2, 9) }
 
 function emptyRow(): BulkEntry {
-  return { id: uid(), beneficiary: '', amount: '', cliffDays: '30', vestingDays: '365' }
+  return { id: uid(), beneficiary: '', amount: '', cliffValue: '30', cliffUnit: 'days', vestingValue: '365', vestingUnit: 'days' }
 }
 
-function validateRow(row: BulkEntry): string | undefined {
+function validateRow(row: BulkEntry, chainTimestamp?: number): string | undefined {
+  if (row.error) return row.error
   if (!row.beneficiary.startsWith('0x') || row.beneficiary.length !== 42)
     return 'Invalid address'
   const amt = parseFloat(row.amount)
   if (isNaN(amt) || amt <= 0) return 'Amount must be > 0'
-  const cliff = parseInt(row.cliffDays)
-  const vest = parseInt(row.vestingDays)
-  if (isNaN(vest) || vest <= 0) return 'Vesting days must be > 0'
-  if (isNaN(cliff) || cliff < 0) return 'Cliff must be ≥ 0'
-  if (cliff > vest) return 'Cliff > vesting period'
-  return undefined
+  const durationError = validateDurationPair(row.cliffValue, row.cliffUnit, row.vestingValue, row.vestingUnit)
+  if (durationError || chainTimestamp === undefined) return durationError
+  const cliffSeconds = durationToSeconds(row.cliffValue, row.cliffUnit)
+  const vestingSeconds = durationToSeconds(row.vestingValue, row.vestingUnit)
+  return validateScheduleTimes(BigInt(scheduleStartFromChainTime(chainTimestamp)), cliffSeconds, vestingSeconds)
 }
 
-function parseCsv(text: string): BulkEntry[] {
-  const lines = text.split(/\r?\n/).filter(l => l.trim())
-  const rows: BulkEntry[] = []
-  for (const line of lines) {
-    const parts = line.split(',').map(s => s.trim())
-    if (parts.length < 2) continue
-    const [beneficiary, amount, cliffDays = '30', vestingDays = '365'] = parts
-    if (beneficiary?.toLowerCase() === 'beneficiary') continue
-    rows.push({ id: uid(), beneficiary: beneficiary ?? '', amount: amount ?? '', cliffDays, vestingDays })
-  }
-  return rows
-}
-
-function totalUsdc(entries: BulkEntry[]): bigint {
+function totalUsdc(entries: BulkEntry[], decimals: number): bigint {
   return entries.reduce((acc, e) => {
-    try { return acc + parseUnitsExact(e.amount || '0', USDC_DECIMALS) } catch { return acc }
+    try { return acc + parseUnitsExact(e.amount || '0', decimals) } catch { return acc }
   }, 0n)
 }
 
@@ -101,47 +92,63 @@ function saveDoneTx(beneficiary: string, txHash: string) {
 // ─── Single-row processor ─────────────────────────────────────────────────────
 interface RowProcessorProps {
   onDone: (txHash: string | undefined, success: boolean, errMsg?: string) => void
+  contractConfig: { address: Address; abi: Abi; chainId: number }
+  usdcAddress: Address
+  usdcDecimals: number
+  chainTime: number
 }
 
-function useRowProcessor({ onDone }: RowProcessorProps) {
+function useRowProcessor({ onDone, contractConfig, usdcAddress, usdcDecimals, chainTime }: RowProcessorProps) {
+  const { address } = useAccount()
   const { writeContract, data: txHash, isPending, reset, error: writeError } = useWriteContract()
-  const { isLoading: isConfirming, isSuccess, isError: receiptError } = useWaitForTransactionReceipt({ hash: txHash })
+  const { data: receipt, isLoading: isConfirming, isSuccess, isError: receiptError } = useWaitForTransactionReceipt({ hash: txHash })
   const phaseRef = useRef<'idle' | 'approve' | 'create'>('idle')
   const rowRef = useRef<BulkEntry | null>(null)
   const skipApproveRef = useRef(false)
+  const submitCreate = useCallback((row: BulkEntry) => {
+    const rawAmount = parseUnitsExact(row.amount, usdcDecimals)
+    const cliffSeconds = durationToSeconds(row.cliffValue, row.cliffUnit)
+    const vestingSeconds = durationToSeconds(row.vestingValue, row.vestingUnit)
+    const startTime = BigInt(scheduleStartFromChainTime(chainTime))
+    const scheduleTimeError = validateScheduleTimes(startTime, cliffSeconds, vestingSeconds)
+    if (scheduleTimeError) {
+      onDone(undefined, false, scheduleTimeError)
+      return
+    }
+    writeContract({
+      ...contractConfig,
+      functionName: 'createSchedule',
+      args: [
+        row.beneficiary as `0x${string}`,
+        rawAmount,
+        cliffSeconds,
+        vestingSeconds,
+        startTime,
+      ],
+    })
+  }, [chainTime, contractConfig, onDone, usdcDecimals, writeContract])
 
   const processApprove = useCallback((row: BulkEntry, existingAllowance: bigint) => {
     rowRef.current = row
-    const rawAmount = parseUnitsExact(row.amount, USDC_DECIMALS)
+    const rawAmount = parseUnitsExact(row.amount, usdcDecimals)
 
     if (existingAllowance >= rawAmount) {
       // Allowance sufficient — skip approve, go straight to create
       skipApproveRef.current = true
       phaseRef.current = 'create'
-      const now = Math.floor(Date.now() / 1000)
-      writeContract({
-        ...CONTRACT,
-        functionName: 'createSchedule',
-        args: [
-          row.beneficiary as `0x${string}`,
-          rawAmount,
-          BigInt(parseInt(row.cliffDays) * 86400),
-          BigInt(parseInt(row.vestingDays) * 86400),
-          BigInt(now),
-        ],
-      })
+      submitCreate(row)
     } else {
       skipApproveRef.current = false
       phaseRef.current = 'approve'
       writeContract({
-        address: USDC_ADDRESS,
+        address: usdcAddress,
         abi: erc20Abi,
         functionName: 'approve',
-        args: [CONTRACT.address, rawAmount],
-        chainId: CHAIN_ID,
+        args: [contractConfig.address, rawAmount],
+        chainId: contractConfig.chainId,
       })
     }
-  }, [writeContract])
+  }, [contractConfig, submitCreate, usdcAddress, usdcDecimals, writeContract])
 
   // Approval confirmed → submit createSchedule
   useEffect(() => {
@@ -151,32 +158,27 @@ function useRowProcessor({ onDone }: RowProcessorProps) {
 
     if (phaseRef.current === 'approve') {
       phaseRef.current = 'create'
-      const rawAmount = parseUnitsExact(row.amount, USDC_DECIMALS)
-      const now = Math.floor(Date.now() / 1000)
       reset()
-      writeContract({
-        ...CONTRACT,
-        functionName: 'createSchedule',
-        args: [
-          row.beneficiary as `0x${string}`,
-          rawAmount,
-          BigInt(parseInt(row.cliffDays) * 86400),
-          BigInt(parseInt(row.vestingDays) * 86400),
-          BigInt(now),
-        ],
-      })
+      submitCreate(row)
     } else if (phaseRef.current === 'create') {
       const hash = txHash
       const doneRow = rowRef.current
       rowRef.current = null
       phaseRef.current = 'idle'
       skipApproveRef.current = false
+      if (receipt && address) {
+        appendLocalVestingRecords(decodeConfirmedVestingReceipt({
+          chainId: contractConfig.chainId,
+          wallet: address,
+          vaultAddress: contractConfig.address,
+        }, receipt))
+      }
       reset()
       if (doneRow && hash) saveDoneTx(doneRow.beneficiary, hash)
       onDone(hash, true)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSuccess])
+  }, [address, contractConfig.address, contractConfig.chainId, isSuccess, receipt, submitCreate])
 
   // Any error (write rejection or receipt failure)
   useEffect(() => {
@@ -201,9 +203,28 @@ function useRowProcessor({ onDone }: RowProcessorProps) {
 }
 
 // ─── BulkVesting ─────────────────────────────────────────────────────────────
-export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
-  const { address, chainId } = useAccount()
+interface BulkVestingProps {
+  onCreated?: () => void
+  contractConfig?: { address: Address; abi: Abi; chainId: number }
+  usdcAddress?: Address
+  usdcDecimals?: number
+  chainId?: number
+  contractDeployed?: boolean
+  contractError?: string | null
+}
+
+export default function BulkVesting({
+  onCreated,
+  contractConfig = CONTRACT,
+  usdcAddress = USDC_ADDRESS,
+  usdcDecimals = USDC_DECIMALS,
+  chainId: activeChainId = CHAIN_ID,
+  contractDeployed = CONTRACT_DEPLOYED,
+  contractError = CONTRACT_CONFIG_ERROR,
+}: BulkVestingProps) {
+  const { address, chainId: connectedChainId } = useAccount()
   const { switchChain } = useSwitchChain()
+  const chainTime = useChainTime()
   const [entries, setEntries] = useState<BulkEntry[]>([emptyRow()])
   const [txStates, setTxStates] = useState<BulkTxState[]>([])
   const [running, setRunning] = useState(false)
@@ -217,18 +238,18 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
   useEffect(() => { cursorRef.current = cursor }, [cursor])
   useEffect(() => { entriesRef.current = entries }, [entries])
 
-  const isWrongChain = chainId !== CHAIN_ID
+  const isWrongChain = connectedChainId !== activeChainId
 
   // Real owner check
-  const { data: ownerAddr } = useReadContract({ ...CONTRACT, functionName: 'owner' })
+  const { data: ownerAddr } = useReadContract({ ...contractConfig, functionName: 'owner' })
   const isOwner = !!address && address.toLowerCase() === (ownerAddr as string | undefined)?.toLowerCase()
 
   // Current USDC allowance for the connected wallet
   const { data: allowanceRaw } = useReadContract({
-    address: USDC_ADDRESS,
+    address: usdcAddress,
     abi: erc20Abi,
     functionName: 'allowance',
-    args: address && CONTRACT.address ? [address, CONTRACT.address] : undefined,
+    args: address && contractConfig.address ? [address, contractConfig.address] : undefined,
     query: { enabled: !!address },
   })
   const currentAllowance = (allowanceRaw) ?? 0n
@@ -260,7 +281,7 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
     }
   }, [onCreated])
 
-  const { processApprove, isPending, isConfirming, phase } = useRowProcessor({ onDone: handleDone })
+  const { processApprove, isPending, isConfirming, phase } = useRowProcessor({ onDone: handleDone, contractConfig, usdcAddress, usdcDecimals, chainTime })
 
   // Kick off the current row exactly once per cursor value
   useEffect(() => {
@@ -283,8 +304,9 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
   }, [cursor, running])
 
   const handleStart = () => {
-    if (isWrongChain) { switchChain({ chainId: CHAIN_ID }); return }
-    const validated = entries.map(e => ({ ...e, error: validateRow(e) }))
+    if (!contractDeployed) { toast.error(contractError ?? 'Vesting contract is not configured.'); return }
+    if (isWrongChain) { switchChain({ chainId: activeChainId }); return }
+    const validated = entries.map(e => ({ ...e, error: validateRow(e, chainTime) }))
     if (validated.some(e => e.error)) { setEntries(validated); return }
 
     // Guard against re-submitting already-confirmed entries (dedup by beneficiary)
@@ -337,7 +359,7 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
     const reader = new FileReader()
     reader.onload = (evt) => {
       const text = evt.target?.result as string
-      const rows = parseCsv(text)
+      const rows = parseBulkCsv(text)
       if (rows.length > 0) { setEntries(rows); toast.success(`Loaded ${rows.length} entries from CSV`) }
       else toast.error('No valid rows found in CSV')
     }
@@ -345,24 +367,31 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
   }
 
   const downloadTemplate = () => {
-    const csv = 'beneficiary,amount,cliffDays,vestingDays\n0x0000000000000000000000000000000000000001,1000,90,365\n'
+    const csv = 'beneficiary,amount,cliffValue,cliffUnit,vestingValue,vestingUnit\n0x0000000000000000000000000000000000000001,1000,90,days,365,days\n'
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
     a.download = 'vestros-bulk-template.csv'
     a.click()
   }
 
-  const total = totalUsdc(entries)
+  const total = totalUsdc(entries, usdcDecimals)
   const isBusy = isPending || isConfirming
-  const validCount = entries.filter(e => !validateRow(e)).length
+  const validCount = entries.filter(e => !validateRow(e, chainTime)).length
   const doneCount = txStates.filter(t => t.status === 'done').length
   const hasFailed = txStates.some(t => t.status === 'failed')
   const batchDone = txStates.length > 0 && doneCount === entries.length
 
+  if (!contractDeployed) {
+    return (
+      <div className="flex flex-col gap-4">
+        <EmptyState icon={<AlertCircle size={24} />} title="Contract not configured" sub={contractError ?? 'Configure the vesting contract for this network before creating schedules.'} />
+      </div>
+    )
+  }
+
   if (!isOwner) {
     return (
       <div className="flex flex-col gap-4">
-        <SectionHeader title="Bulk Vesting" sub="Create multiple schedules at once" />
         <EmptyState icon={<Users size={24} />} title="Owner only" sub="Connect the contract owner wallet to use bulk vesting." />
       </div>
     )
@@ -370,26 +399,20 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <SectionHeader
-        title="Bulk Vesting"
-        sub="Create multiple vesting schedules in sequence. Each requires two wallet confirmations unless allowance is already set."
-        action={
-          <div className="flex gap-2">
-            <button onClick={downloadTemplate}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
-              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--subtle)' }}>
-              <Download size={13} /> Template
-            </button>
-            <label className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer"
-              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}>
-              <Upload size={13} /> Import CSV
-              <input type="file" accept=".csv,text/csv" className="sr-only" onChange={e => {
-                const f = e.target.files?.[0]; if (f) handleCsvUpload(f)
-              }} />
-            </label>
-          </div>
-        }
-      />
+      <div className="flex justify-end gap-2">
+        <button onClick={downloadTemplate}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
+          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--subtle)' }}>
+          <Download size={13} /> Download template
+        </button>
+        <label className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer"
+          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}>
+          <Upload size={13} /> Import CSV
+          <input type="file" accept=".csv,text/csv" className="sr-only" onChange={e => {
+            const f = e.target.files?.[0]; if (f) handleCsvUpload(f)
+          }} />
+        </label>
+      </div>
 
       {/* Allowance notice */}
       {currentAllowance > 0n && (
@@ -422,7 +445,7 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
           <table className="w-full text-xs">
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                {['Beneficiary', 'USDC Amount', 'Cliff (d)', 'Vest (d)', ''].map(h => (
+                {['Beneficiary', 'USDC Amount', 'Cliff', 'Vesting', ''].map(h => (
                   <th key={h} className="px-3 py-2.5 text-left font-semibold uppercase tracking-widest" style={{ color: 'var(--subtle)' }}>{h}</th>
                 ))}
               </tr>
@@ -451,23 +474,37 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
                       />
                     </td>
                     <td className="px-2 py-1.5">
-                      <input type="number" min="0" value={row.cliffDays}
-                        onChange={e => updateRow(row.id, 'cliffDays', e.target.value)} disabled={running}
-                        className="w-16 rounded-lg px-2 py-1.5 text-xs tabular-nums outline-none"
-                        style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-                      />
+                      <div className="flex min-w-36 gap-1">
+                        <input type="number" min="0" step="1" value={row.cliffValue}
+                          onChange={e => updateRow(row.id, 'cliffValue', e.target.value)} disabled={running}
+                          className="w-16 rounded-lg px-2 py-1.5 text-xs tabular-nums outline-none"
+                          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+                        <select value={row.cliffUnit} aria-label="Cliff duration unit" disabled={running}
+                          onChange={e => updateRow(row.id, 'cliffUnit', e.target.value)}
+                          className="min-w-20 rounded-lg px-1.5 py-1.5 text-[11px] outline-none"
+                          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}>
+                          <option value="minutes">Min</option><option value="hours">Hours</option><option value="days">Days</option>
+                        </select>
+                      </div>
                     </td>
                     <td className="px-2 py-1.5">
-                      <input type="number" min="1" value={row.vestingDays}
-                        onChange={e => updateRow(row.id, 'vestingDays', e.target.value)} disabled={running}
-                        className="w-16 rounded-lg px-2 py-1.5 text-xs tabular-nums outline-none"
-                        style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-                      />
+                      <div className="flex min-w-36 gap-1">
+                        <input type="number" min="1" step="1" value={row.vestingValue}
+                          onChange={e => updateRow(row.id, 'vestingValue', e.target.value)} disabled={running}
+                          className="w-16 rounded-lg px-2 py-1.5 text-xs tabular-nums outline-none"
+                          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+                        <select value={row.vestingUnit} aria-label="Vesting duration unit" disabled={running}
+                          onChange={e => updateRow(row.id, 'vestingUnit', e.target.value)}
+                          className="min-w-20 rounded-lg px-1.5 py-1.5 text-[11px] outline-none"
+                          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}>
+                          <option value="minutes">Min</option><option value="hours">Hours</option><option value="days">Days</option>
+                        </select>
+                      </div>
                     </td>
                     <td className="px-2 py-1.5 w-24 text-center">
                       {isDone && (
                         txState.txHash
-                          ? <a href={buildTxExplorerUrl(CHAIN_ID, txState.txHash)} target="_blank" rel="noopener noreferrer"><CheckCircle2 size={14} style={{ color: 'var(--success)' }} /></a>
+                          ? <a href={buildTxExplorerUrl(activeChainId, txState.txHash)} target="_blank" rel="noopener noreferrer"><CheckCircle2 size={14} style={{ color: 'var(--success)' }} /></a>
                           : <CheckCircle2 size={14} style={{ color: 'var(--success)' }} />
                       )}
                       {isFailed && (
@@ -563,7 +600,7 @@ export default function BulkVesting({ onCreated }: { onCreated?: () => void }) {
               style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
               <span className="mono text-xs" style={{ color: 'var(--ink-2)' }}>{fmtAddr(t.beneficiary)}</span>
               {t.status === 'done' && t.txHash ? (
-                <a href={buildTxExplorerUrl(CHAIN_ID, t.txHash as `0x${string}`)} target="_blank" rel="noopener noreferrer"
+                <a href={buildTxExplorerUrl(activeChainId, t.txHash as `0x${string}`)} target="_blank" rel="noopener noreferrer"
                   className="flex items-center gap-1 text-xs font-semibold" style={{ color: 'var(--success)' }}>
                   <CheckCircle2 size={12} /> Confirmed
                 </a>

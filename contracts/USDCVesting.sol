@@ -70,6 +70,9 @@ contract USDCVesting is Ownable2Step, Pausable, ReentrancyGuard {
         if (totalAmount == 0) revert ZeroAmount();
         if (vestingDuration == 0) revert ZeroDuration();
         if (cliffDuration > vestingDuration) revert CliffExceedsDuration();
+        // The deployed contract intentionally uses block time with a 60-second
+        // confirmation buffer.
+        // forge-lint: disable-next-line(block-timestamp)
         if (block.timestamp > 60 && uint256(startTime) + 60 < block.timestamp) revert StartTimeInPast();
 
         uint48 cliffTime = startTime + cliffDuration;
@@ -166,6 +169,8 @@ contract USDCVesting is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 elapsed = effectiveTs - schedule.startTime;
         uint256 duration = schedule.endTime - schedule.startTime;
 
+        // The ratio is <= 1 and totalAmount is already constrained to uint128.
+        // forge-lint: disable-next-line(unsafe-typecast)
         return uint128((uint256(schedule.totalAmount) * elapsed) / duration);
     }
 

@@ -1,35 +1,41 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import { getMyApplications, getMyAwards } from '../api'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { getMyApplications, getMyAwards, getNotifications, markNotificationRead } from '../api'
 import { useAuth } from '../useAuth'
 import { useAccount } from 'wagmi'
 import { fmtDate, fmtAddr } from '../../formatters'
 import { AuthBanner } from '../components/AuthBanner'
 import { AppStatusChip, AwardStatusChip } from '../components/Chips'
-import type { GrantApplication, GrantAward } from '../types'
+import type { GrantApplication, GrantAward, GrantNotification } from '../types'
+import { isFundedApplicationStatus } from '../app-status'
 import { ExternalLink, Award } from 'lucide-react'
-
-const EXPLORER = 'https://explorer.testnet.arc.io/tx/'
+import { buildTxExplorerUrl } from '@/onchain-facts'
+import { CHAIN_ID } from '@/contractConfig'
 
 type TabKey = 'applications' | 'awards'
 
 export function MyGrants() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const { address: walletAddr } = useAccount()
   const { address: sessionAddr } = useAuth()
 
-  const [tab, setTab] = useState<TabKey>('applications')
+  const pathTab: TabKey = location.pathname.endsWith('/awards') || new URLSearchParams(location.search).get('tab') === 'awards' ? 'awards' : 'applications'
+  const tab = pathTab
   const [apps, setApps] = useState<GrantApplication[]>([])
   const [awards, setAwards] = useState<GrantAward[]>([])
   const [loading, setLoading] = useState(!!sessionAddr)
   const [err, setErr] = useState<string | null>(null)
+  const [notifications, setNotifications] = useState<GrantNotification[]>([])
 
   useEffect(() => {
     if (!sessionAddr) return
     const load = async () => {
       try {
-        const [a, aw] = await Promise.all([getMyApplications(), getMyAwards()])
+        const [a, aw, notes] = await Promise.all([getMyApplications(), getMyAwards(), getNotifications()])
         setApps(a)
         setAwards(aw)
+        setNotifications(notes.filter(note => !note.read).slice(0, 5))
         setErr(null)
       } catch (e) {
         setErr((e as Error).message)
@@ -56,6 +62,8 @@ export function MyGrants() {
     <div className="max-w-3xl mx-auto px-4 py-8">
       <h1 className="display text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>My Grants</h1>
 
+      {notifications.length > 0 && <div className="mb-5 rounded-md px-4 py-3 space-y-2" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}><p className="text-xs font-semibold" style={{ color: 'var(--ink)' }}>Updates</p>{notifications.map(note => <button key={note.id} type="button" onClick={() => { setNotifications(current => current.filter(item => item.id !== note.id)); void markNotificationRead(note.id) }} className="block w-full text-left text-xs hover:underline" style={{ color: 'var(--ink-2)' }}>{note.message}</button>)}</div>}
+
       <div className="flex gap-1 mb-5 p-1 rounded-xl" style={{ background: 'var(--surface-muted)' }}>
         {([
           { key: 'applications' as TabKey, label: `Applications (${apps.length})` },
@@ -63,7 +71,7 @@ export function MyGrants() {
         ] as const).map(t => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => void navigate(t.key === 'awards' ? '/granthub/awards' : '/granthub/applications')}
             className="flex-1 py-2 rounded-lg text-xs font-semibold transition-colors"
             style={{
               background: tab === t.key ? 'var(--surface-strong)' : 'transparent',
@@ -111,6 +119,9 @@ export function MyGrants() {
                   Under review
                 </p>
               )}
+              {a.status === 'draft' && (
+                <Link to={`/granthub/apply/${a.grant_id}?applicationId=${a.id}`} className="inline-block text-xs mt-2 hover:underline" style={{ color: 'var(--accent)' }}>Continue application</Link>
+              )}
               {a.status === 'approved' && (
                 <p className="text-xs mt-2" style={{ color: 'var(--success)' }}>
                   Approved — awaiting award activation
@@ -121,7 +132,7 @@ export function MyGrants() {
                   Not selected for this round
                 </p>
               )}
-              {a.status === 'awarded' && (
+              {isFundedApplicationStatus(a.status) && (
                 <p className="text-xs mt-2" style={{ color: 'var(--success)' }}>
                   Award activated — check your vesting schedule below
                 </p>
@@ -157,7 +168,7 @@ export function MyGrants() {
                   </p>
                   {a.tx_hash && (
                     <a
-                      href={`${EXPLORER}${a.tx_hash}`}
+                      href={buildTxExplorerUrl(a.chain_id ?? CHAIN_ID, a.tx_hash)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs mt-1 hover:underline"

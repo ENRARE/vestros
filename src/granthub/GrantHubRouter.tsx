@@ -8,24 +8,48 @@ import { ReviewWorkspace } from './pages/ReviewWorkspace'
 import { MyGrants } from './pages/MyGrants'
 import { CreateGrant } from './pages/CreateGrant'
 import { CreateOrg } from './pages/CreateOrg'
+import { FundingPage } from '@/features/organization/FundingPage'
+import { isGrantHubRouteComingSoon, type GrantHubRouteKey } from './featureAvailability'
+import { ComingSoonOverlay } from '@/components/ui/ComingSoonOverlay'
 
 /** Consistent page padding for all GrantHub routes */
 function PageContainer({ children }: { children: React.ReactNode }) {
-  return <div className="px-6 py-6 w-full">{children}</div>
+  return (
+    <div className="px-6 py-6 w-full space-y-4">{children}</div>
+  )
+}
+
+function GrantHubRoute({ route, children }: { route: GrantHubRouteKey; children: React.ReactNode }) {
+  return (
+    <ComingSoonOverlay
+      locked={isGrantHubRouteComingSoon(route)}
+      dismissible={false}
+      description="This feature is not available yet."
+      secondaryText=""
+      className="min-h-[calc(100vh-8rem)]"
+    >
+      <PageContainer>{children}</PageContainer>
+    </ComingSoonOverlay>
+  )
 }
 
 export function GrantHubRouter() {
   return (
     <Routes>
-      <Route index               element={<PageContainer><GrantExplorer /></PageContainer>} />
-      <Route path="grants/new"   element={<PageContainer><CreateGrant /></PageContainer>} />
-      <Route path="grants/:id"   element={<PageContainer><GrantDetail /></PageContainer>} />
-      <Route path="orgs/new"     element={<PageContainer><CreateOrg /></PageContainer>} />
-      <Route path="orgs/:slug"   element={<PageContainer><OrgProfile /></PageContainer>} />
-      <Route path="apply/:grantId" element={<PageContainer><ApplyPage /></PageContainer>} />
-      <Route path="dashboard"    element={<PageContainer><OrgDashboard /></PageContainer>} />
-      <Route path="review/:id"   element={<PageContainer><ReviewWorkspace /></PageContainer>} />
-      <Route path="my"           element={<PageContainer><MyGrants /></PageContainer>} />
+      <Route index element={<GrantHubRoute route="explorer"><GrantExplorer /></GrantHubRoute>} />
+      <Route path="grants/new" element={<GrantHubRoute route="create-grant"><CreateGrant /></GrantHubRoute>} />
+      <Route path="create" element={<GrantHubRoute route="create-grant"><CreateGrant /></GrantHubRoute>} />
+      <Route path="grants/:id/edit" element={<GrantHubRoute route="create-grant"><CreateGrant /></GrantHubRoute>} />
+      <Route path="grants/:id" element={<GrantHubRoute route="grant-detail"><GrantDetail /></GrantHubRoute>} />
+      <Route path="orgs/new" element={<GrantHubRoute route="create-org"><CreateOrg /></GrantHubRoute>} />
+      <Route path="orgs/:slug" element={<GrantHubRoute route="org-profile"><OrgProfile /></GrantHubRoute>} />
+      <Route path="apply/:grantId" element={<GrantHubRoute route="apply"><ApplyPage /></GrantHubRoute>} />
+      <Route path="dashboard" element={<GrantHubRoute route="dashboard"><OrgDashboard /></GrantHubRoute>} />
+      <Route path="review/:id" element={<GrantHubRoute route="review"><ReviewWorkspace /></GrantHubRoute>} />
+      <Route path="my" element={<GrantHubRoute route="my-grants"><MyGrants /></GrantHubRoute>} />
+      <Route path="applications" element={<GrantHubRoute route="applications"><MyGrants /></GrantHubRoute>} />
+      <Route path="awards" element={<GrantHubRoute route="awards"><MyGrants /></GrantHubRoute>} />
+      <Route path="funding" element={<GrantHubRoute route="funding"><FundingPage /></GrantHubRoute>} />
       <Route path="*"            element={<Navigate to="" replace />} />
     </Routes>
   )

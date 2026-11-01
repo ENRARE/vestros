@@ -47,10 +47,11 @@ export function MetricTile({
 }) {
   return (
     <div
-      className="rounded-xl px-4 py-4 flex flex-col gap-1"
+      className="px-4 py-4 flex flex-col gap-1"
       style={{
         background: accent ? 'var(--accent-dim)' : 'var(--surface-muted)',
-        border: `1px solid ${accent ? 'var(--accent)' : 'var(--border)'}`,
+        border: `1px solid ${accent ? 'rgba(35,137,232,0.35)' : 'var(--border)'}`,
+        borderRadius: 'var(--radius-card)',
         minWidth: 0,
       }}
     >
@@ -92,8 +93,8 @@ export function StatusBadge({ label, variant = 'neutral', dot = true }: {
   const s = BADGE_STYLES[variant]
   return (
     <span
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold"
-      style={s}
+      className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold"
+      style={{ ...s, borderRadius: 'var(--radius-control)' }}
     >
       {dot && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'currentColor' }} />}
       {label}
@@ -116,8 +117,8 @@ export function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center py-16 px-4 text-center gap-3">
       <div
-        className="flex items-center justify-center w-14 h-14 rounded-2xl"
-        style={{ background: 'var(--surface-muted)', color: 'var(--subtle)' }}
+        className="flex items-center justify-center w-14 h-14"
+        style={{ background: 'var(--surface-muted)', color: 'var(--subtle)', borderRadius: 'var(--radius-card)' }}
       >
         {icon}
       </div>
@@ -191,7 +192,7 @@ export function Button({
         padding: pad,
         fontSize: fs,
         fontWeight: 600,
-        borderRadius: 10,
+        borderRadius: 'var(--radius-control)',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
         width: fullWidth ? '100%' : undefined,
@@ -200,7 +201,8 @@ export function Button({
         justifyContent: 'center',
         gap: 6,
         transition: 'opacity 150ms, background 150ms',
-        fontFamily: 'inherit',
+        fontFamily: 'Manrope, sans-serif',
+        whiteSpace: 'nowrap',
       }}
     >
       {children}
@@ -226,7 +228,7 @@ export function Card({
       style={{
         background: 'var(--surface-muted)',
         border: '1px solid var(--border)',
-        borderRadius: 16,
+        borderRadius: 'var(--radius-card)',
         padding: padding ? '20px 20px' : 0,
         ...style,
       }}
@@ -270,13 +272,14 @@ export function InputField({
         placeholder={placeholder}
         disabled={disabled}
         required={required}
-        className="w-full rounded-xl px-3 py-2.5 text-sm"
+        className="w-full px-3 py-2.5 text-sm"
         style={{
           background: 'var(--surface-muted)',
           border: `1px solid ${error ? 'var(--danger)' : 'var(--border)'}`,
           color: 'var(--ink)',
           outline: 'none',
-          fontFamily: 'inherit',
+          fontFamily: 'Manrope, sans-serif',
+          borderRadius: 'var(--radius-control)',
         }}
         onFocus={e => { e.currentTarget.style.borderColor = error ? 'var(--danger)' : 'var(--accent)' }}
         onBlur={e => { e.currentTarget.style.borderColor = error ? 'var(--danger)' : 'var(--border)' }}

@@ -55,12 +55,13 @@ export async function handleOrgs(req: Request, url: URL): Promise<Response | nul
     const name = String(body.name ?? '').trim()
     if (!name) return Response.json({ error: 'name required' }, { status: 400 })
 
-    // Derive stable slug/id from name + address fragment
+    // Derive stable slug/id from the requested slug (or name) + address fragment.
     const addrFrag = session.address.slice(2, 8)
-    const slug = name.toLowerCase()
+    const slug = String(body.slug ?? name).toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')
       .slice(0, 36)
+    if (!slug) return Response.json({ error: 'slug must contain letters or numbers' }, { status: 400 })
     const id = `${slug}-${addrFrag}`
 
     const exists = db.prepare<{ n: number }, string>(`SELECT COUNT(*) as n FROM orgs WHERE id = ?`).get(id)

@@ -7,6 +7,8 @@ import { fmtDate, fmtAddr } from '../../formatters'
 import { ExternalLink, Calendar, Users, Award, DollarSign, ArrowLeft, Clock } from 'lucide-react'
 import { StatusChip, AwardStatusChip } from '../components/Chips'
 import type { GrantProgram, GrantApplication, GrantAward } from '../types'
+import { CHAIN_ID } from '@/contractConfig'
+import { usdcDecimalsFor } from '@/onchain-money'
 
 export function GrantDetail() {
   const { id } = useParams<{ id: string }>()
@@ -45,7 +47,8 @@ export function GrantDetail() {
   const canReview = !!sessionAddr
   const hasApplied = walletAddr && apps.some(a => a.applicant_addr.toLowerCase() === walletAddr.toLowerCase())
   const budgetN = parseFloat(grant.total_budget ?? '0')
-  const depositPct = budgetN > 0 ? Math.min(100, (depositTotal / budgetN) * 100) : 0
+  const depositHuman = depositTotal / 10 ** usdcDecimalsFor(CHAIN_ID)
+  const depositPct = budgetN > 0 ? Math.min(100, (depositHuman / budgetN) * 100) : 0
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
@@ -111,7 +114,7 @@ export function GrantDetail() {
           <div className="mt-4 space-y-1">
             <div className="flex justify-between text-xs" style={{ color: 'var(--subtle)' }}>
               <span>Confirmed deposits</span>
-              <span>{depositTotal.toFixed(2)} / {grant.total_budget} USDC ({depositPct.toFixed(0)}%)</span>
+              <span>{depositHuman.toFixed(2)} / {grant.total_budget} USDC ({depositPct.toFixed(0)}%)</span>
             </div>
             <div className="rounded-full h-1.5 overflow-hidden" style={{ background: 'var(--surface-muted)' }}>
               <div className="h-full rounded-full transition-all" style={{ width: `${depositPct}%`, background: 'var(--success)' }} />
@@ -174,7 +177,7 @@ export function GrantDetail() {
         className="inline-flex items-center gap-1.5 text-sm"
         style={{ color: 'var(--accent-hover)' }}
       >
-        View organization <ExternalLink size={12} />
+        View organisation <ExternalLink size={12} />
       </Link>
     </div>
   )

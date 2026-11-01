@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, type ReactNode } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useNavigate } from 'react-router-dom'
 import { ConnectKitButton } from 'connectkit'
 import {
   useAccount,
@@ -8,18 +8,27 @@ import {
   useWaitForTransactionReceipt,
   useSwitchChain,
 } from 'wagmi'
-import { erc20Abi } from 'viem'
+import { erc20Abi, type Abi, type Address } from 'viem'
 import {
   Wallet, Clock, Unlock, Lock, AlertCircle, ExternalLink, Coins,
-  CheckCircle2, XCircle, ChevronDown, ChevronUp, Info,
+  CheckCircle2, XCircle, ChevronDown, ChevronUp, Info, History, Copy,
 } from 'lucide-react'
 import { TokenUSDC } from '@web3icons/react'
 import { toast } from 'sonner'
 import { buildTxExplorerUrl, buildAddressExplorerUrl } from '@/onchain-facts'
 import { parseUnitsExact } from '@/onchain-money'
-import { CHAIN_ID, CONTRACT, USDC_ADDRESS, USDC_DECIMALS } from '@/contractConfig'
-import { fmtUsdc, fmtDate, fmtAddr } from '@/formatters'
+import { CONTRACT, CONTRACT_ADDRESS, CONTRACT_CONFIG_ERROR, CONTRACT_DEPLOYED, USDC_ADDRESS, USDC_DECIMALS } from '@/contractConfig'
+import { fmtUsdc, fmtDate, fmtAddr, fmtTimestamp } from '@/formatters'
 import { computeVested, getStatus, getNow, pct } from '@/vestingMath'
+import { useChainTime } from '@/hooks/useChainTime'
+import {
+  durationToSeconds,
+  isDisplayableTimestamp,
+  scheduleStartFromChainTime,
+  validateDurationPair,
+  validateScheduleTimes,
+  type DurationUnit,
+} from '@/vestingDuration'
 import type { VestingSchedule, ScheduleStatus } from '@/types'
 
 import BulkVesting from '@/components/BulkVesting'
@@ -28,6 +37,25 @@ import TreasuryDashboard from '@/components/TreasuryDashboard'
 import { GrantHubRouter } from '@/granthub/GrantHubRouter'
 import { AppShell } from '@/components/layout/AppShell'
 import { OverviewPage } from '@/features/overview/OverviewPage'
+import { ActivityPage } from '@/features/workspace/ActivityPage'
+import { AnalyticsPage } from '@/features/workspace/AnalyticsPage'
+import { ReportsPage } from '@/features/workspace/ReportsPage'
+import { HelpPage, SettingsPage } from '@/features/workspace/AccountPages'
+import { TeamManagementPage } from '@/features/vesting/TeamManagementPage'
+import { LandingPage } from '@/features/landing/LandingPage'
+import { APP_PATH, LANDING_PATH } from '@/appRoutes'
+import { VestingVaultSetup } from '@/components/VestingVaultSetup'
+import { useUserVestingVault } from '@/hooks/useUserVestingVault'
+import { useBeneficiaryVestingSchedules } from '@/hooks/useBeneficiaryVestingSchedules'
+import { mergeScheduleRefs, normalizeVestingSchedule } from '@/hooks/beneficiaryScheduleDiscovery'
+import { isSelfServiceVaultOwner } from '@/features/vesting/selfServiceWorkflow'
+import { SELF_SERVICE_CHAIN_ID, SELF_SERVICE_USDC_ADDRESS, SELF_SERVICE_USDC_DECIMALS } from '@/vestingFactoryConfig'
+import { useVestingEvents } from '@/hooks/useVestingEvents'
+import { useScheduleTransactionHistory, type ScheduleHistoryRecord } from '@/hooks/useScheduleTransactionHistory'
+import { selectMyVestingScheduleLogs } from '@/features/vesting/myVestingSchedule'
+import { appendLocalVestingRecords, decodeConfirmedVestingReceipt } from '@/features/vesting/transactionJournal'
+
+type VestingContractConfig = { address: Address; abi: Abi; chainId: number }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function parseOnchainError(err: unknown): string {
@@ -66,8 +94,8 @@ function Tooltip({ text }: { text: string }) {
       </button>
       {show && (
         <span
-          className="absolute z-20 left-5 top-0 w-56 rounded-xl px-3 py-2 text-xs shadow-lg"
-          style={{ background: 'var(--surface-elevated)', color: 'var(--ink)', lineHeight: '1.5', border: '1px solid var(--border)' }}
+          className="absolute z-20 left-5 top-0 w-56 px-3 py-2 text-xs shadow-lg"
+          style={{ background: 'var(--surface-elevated)', color: 'var(--ink)', lineHeight: '1.5', border: '1px solid var(--border)', borderRadius: 'var(--radius-menu)' }}
         >
           {text}
         </span>
@@ -80,13 +108,13 @@ function Tooltip({ text }: { text: string }) {
 function VestingStatusBadge({ status }: { status: ScheduleStatus }) {
   const map: Record<ScheduleStatus, { label: string; bg: string; color: string; icon: ReactNode }> = {
     locked:      { label: 'Locked',       bg: 'rgba(90,100,120,0.18)',    color: 'var(--muted)',   icon: <Lock size={11} /> },
-    vesting:     { label: 'Vesting',      bg: 'rgba(45,212,191,0.12)',    color: 'var(--accent)',  icon: <Unlock size={11} /> },
+    vesting:     { label: 'Vesting',      bg: 'var(--accent-dim)',         color: 'var(--accent)',  icon: <Unlock size={11} /> },
     fully_vested:{ label: 'Fully Vested', bg: 'rgba(74,222,128,0.12)',    color: 'var(--success)', icon: <CheckCircle2 size={11} /> },
     revoked:     { label: 'Revoked',      bg: 'rgba(248,113,113,0.12)',   color: 'var(--danger)',  icon: <XCircle size={11} /> },
   }
   const { label, bg, color, icon } = map[status]
   return (
-    <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: bg, color }}>
+    <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5" style={{ background: bg, color, borderRadius: 'var(--radius-control)' }}>
       {icon}{label}
     </span>
   )
@@ -96,7 +124,7 @@ function VestingStatusBadge({ status }: { status: ScheduleStatus }) {
 function ProgressBar({ vested, claimed }: { vested: number; claimed: number }) {
   return (
     <div className="relative h-2 w-full rounded-full overflow-hidden" style={{ background: 'var(--surface-elevated)' }}>
-      <div className="absolute left-0 top-0 h-full rounded-full transition-all" style={{ width: `${vested}%`, background: 'rgba(45,212,191,0.2)' }} />
+      <div className="absolute left-0 top-0 h-full rounded-full transition-all" style={{ width: `${vested}%`, background: 'rgba(35,137,232,0.2)' }} />
       <div className="absolute left-0 top-0 h-full rounded-full transition-all" style={{ width: `${claimed}%`, background: 'var(--accent)' }} />
     </div>
   )
@@ -182,25 +210,117 @@ function RevokeModal({
   )
 }
 
+function historyEventLabel(type: ScheduleHistoryRecord['type']): string {
+  if (type === 'created') return 'Schedule created'
+  if (type === 'claimed') return 'USDC claimed'
+  return 'Schedule revoked'
+}
+
+function ScheduleTransactionHistory({ vaultAddress, scheduleId, chainId }: { vaultAddress: Address; scheduleId: bigint; chainId: number }) {
+  const [expanded, setExpanded] = useState(false)
+  const { records, status, error, retry } = useScheduleTransactionHistory({ vaultAddress, scheduleId, enabled: expanded })
+
+  const copyHash = (hash: string) => {
+    const clipboard = navigator.clipboard
+    if (!clipboard) return
+    void clipboard.writeText(hash).then(() => toast.success('Transaction hash copied'))
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)' }}>
+      <button
+        onClick={() => setExpanded(value => !value)}
+        className="flex items-center justify-between px-5 py-3 text-xs font-medium w-full transition-colors"
+        style={{ color: 'var(--subtle)', background: expanded ? 'var(--surface-elevated)' : 'transparent' }}
+        aria-expanded={expanded}
+      >
+        <span className="flex items-center gap-1.5"><History size={13} />Transaction History</span>
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {expanded && (
+        <div className="px-5 pb-4 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+          {status === 'loading' && <p className="text-xs" style={{ color: 'var(--muted)' }}>Loading verified transaction history…</p>}
+          {status === 'empty' && <p className="text-xs" style={{ color: 'var(--muted)' }}>No verified transaction history is available yet.</p>}
+          {status === 'degraded' && records.length === 0 && (
+            <div className="flex items-center justify-between gap-3 text-xs" style={{ color: 'var(--muted)' }}>
+              <span>{error ?? 'Transaction history is temporarily unavailable.'}</span>
+              <button onClick={retry} className="font-semibold shrink-0" style={{ color: 'var(--accent)' }}>Retry</button>
+            </div>
+          )}
+          {status === 'degraded' && records.length > 0 && (
+            <div className="flex items-center justify-between gap-3 mb-2 text-xs" style={{ color: 'var(--muted)' }}>
+              <span>Some transaction details are temporarily unavailable.</span>
+              <button onClick={retry} className="font-semibold shrink-0" style={{ color: 'var(--accent)' }}>Retry</button>
+            </div>
+          )}
+          {records.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {records.map(record => (
+                <div key={`${record.vaultAddress}-${record.scheduleId.toString()}-${record.txHash}-${record.logIndex}`} className="rounded-xl px-3 py-2.5" style={{ background: 'var(--surface-muted)' }}>
+                  <div className="flex items-start gap-2">
+                    <span className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--surface-elevated)' }}>
+                      {record.type === 'created' ? <History size={13} style={{ color: 'var(--accent)' }} /> : record.type === 'claimed' ? <CheckCircle2 size={13} style={{ color: 'var(--success)' }} /> : <XCircle size={13} style={{ color: 'var(--danger)' }} />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold" style={{ color: 'var(--ink-2)' }}>{historyEventLabel(record.type)}</span>
+                        {record.amount > 0n && <span className="text-xs font-semibold tabular-nums" style={{ color: 'var(--ink-2)' }}>{fmtUsdc(record.amount)} USDC</span>}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]" style={{ color: 'var(--muted)' }}>
+                        <span>{record.timestamp === undefined ? 'Timestamp unavailable' : fmtTimestamp(Number(record.timestamp))}</span>
+                        <span style={{ color: record.status === 'confirmed' ? 'var(--success)' : record.status === 'failed' ? 'var(--danger)' : 'var(--subtle)' }}>{record.status === 'confirmed' ? 'Confirmed' : record.status === 'failed' ? 'Failed' : 'Unavailable'}</span>
+                        {record.from && <span className="mono">from {fmtAddr(record.from)}</span>}
+                      </div>
+                      {record.txHash && (
+                        <div className="mt-1 flex items-center gap-2">
+                          <span className="mono text-[11px]" style={{ color: 'var(--subtle)' }}>{fmtAddr(record.txHash)}</span>
+                          <button onClick={() => copyHash(record.txHash)} aria-label="Copy transaction hash" className="p-0.5" style={{ color: 'var(--subtle)' }}><Copy size={11} /></button>
+                          <a href={buildTxExplorerUrl(chainId, record.txHash)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold" style={{ color: 'var(--accent)' }}>View on Explorer</a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── ScheduleCard ─────────────────────────────────────────────────────────────
-function ScheduleCard({ id, isOwner, isMine }: { id: bigint; isOwner: boolean; isMine: boolean }) {
+function ScheduleCard({ id, isOwner, isMine, contractConfig = CONTRACT, contractDeployed = CONTRACT_DEPLOYED, contractError = CONTRACT_CONFIG_ERROR, prefetchedSchedule, prefetchedClaimable, onUpdated }: {
+  id: bigint
+  isOwner: boolean
+  isMine: boolean
+  contractConfig?: VestingContractConfig
+  contractDeployed?: boolean
+  contractError?: string | null
+  prefetchedSchedule?: VestingSchedule
+  prefetchedClaimable?: bigint
+  onUpdated?: () => void
+}) {
   const { address } = useAccount()
   const [expanded, setExpanded] = useState(false)
   const [showRevokeModal, setShowRevokeModal] = useState(false)
 
-  const { data: raw, refetch } = useReadContract({ ...CONTRACT, functionName: 'getSchedule', args: [id] })
-  const { data: claimable, refetch: refetchClaimable } = useReadContract({ ...CONTRACT, functionName: 'claimableAmount', args: [id] })
+  const { data: raw, refetch } = useReadContract({ ...contractConfig, functionName: 'getSchedule', args: [id], query: { enabled: prefetchedSchedule === undefined } })
+  const { data: claimable, refetch: refetchClaimable } = useReadContract({ ...contractConfig, functionName: 'claimableAmount', args: [id], query: { enabled: prefetchedClaimable === undefined } })
   const { writeContract, data: txHash, isPending, reset: resetWrite } = useWriteContract()
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
+  const { data: receipt, isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
 
   const handleClaim = () => {
-    try { writeContract({ ...CONTRACT, functionName: 'claim', args: [id] }) }
+    if (!contractDeployed) { toast.error(contractError ?? 'Vesting contract is not configured.'); return }
+    try { writeContract({ ...contractConfig, functionName: 'claim', args: [id] }) }
     catch (e) { toast.error(parseOnchainError(e)) }
   }
 
   const handleRevokeConfirm = () => {
+    if (!contractDeployed) { toast.error(contractError ?? 'Vesting contract is not configured.'); return }
     try {
-      writeContract({ ...CONTRACT, functionName: 'revoke', args: [id] })
+      writeContract({ ...contractConfig, functionName: 'revoke', args: [id] })
       setShowRevokeModal(false)
     } catch (e) {
       toast.error(parseOnchainError(e))
@@ -210,17 +330,25 @@ function ScheduleCard({ id, isOwner, isMine }: { id: bigint; isOwner: boolean; i
 
   useEffect(() => {
     if (isSuccess) {
+      if (receipt && address) {
+        appendLocalVestingRecords(decodeConfirmedVestingReceipt({
+          chainId: contractConfig.chainId,
+          wallet: address,
+          vaultAddress: contractConfig.address,
+        }, receipt))
+      }
       toast.success('Transaction confirmed!', {
-        action: txHash ? { label: 'Explorer', onClick: () => window.open(buildTxExplorerUrl(CHAIN_ID, txHash), '_blank') } : undefined,
+        action: txHash ? { label: 'Explorer', onClick: () => window.open(buildTxExplorerUrl(contractConfig.chainId, txHash), '_blank') } : undefined,
       })
       void refetch()
       void refetchClaimable()
+      onUpdated?.()
       resetWrite()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSuccess])
+  }, [address, contractConfig.address, contractConfig.chainId, isSuccess, receipt, refetch, refetchClaimable, resetWrite, txHash, onUpdated])
 
-  const s = raw as VestingSchedule | undefined
+  const s = prefetchedSchedule ?? normalizeVestingSchedule(raw)
   if (!s || s.totalAmount === 0n) return null
 
   const now = getNow()
@@ -228,7 +356,7 @@ function ScheduleCard({ id, isOwner, isMine }: { id: bigint; isOwner: boolean; i
   const vested = computeVested(s, now)
   const vestedPct = pct(vested, s.totalAmount)
   const claimedPct = pct(s.claimedAmount, s.totalAmount)
-  const claimableAmt = (claimable as bigint | undefined) ?? 0n
+  const claimableAmt = prefetchedClaimable ?? (claimable as bigint | undefined) ?? 0n
   const stillLocked = s.totalAmount - vested
   const isBeneficiary = address?.toLowerCase() === s.beneficiary.toLowerCase()
   const isBusy = isPending || isConfirming
@@ -265,7 +393,7 @@ function ScheduleCard({ id, isOwner, isMine }: { id: bigint; isOwner: boolean; i
                 <span className="text-xs font-medium tracking-widest uppercase" style={{ color: 'var(--subtle)' }}>Schedule #{id.toString()}</span>
                 <VestingStatusBadge status={status} />
               </div>
-              <a href={buildAddressExplorerUrl(CHAIN_ID, s.beneficiary)} target="_blank" rel="noopener noreferrer"
+              <a href={buildAddressExplorerUrl(contractConfig.chainId, s.beneficiary)} target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1 text-sm font-medium hover:underline mt-0.5" style={{ color: 'var(--ink-2)' }}>
                 <span className="mono">{fmtAddr(s.beneficiary)}</span>
                 <ExternalLink size={12} />
@@ -364,6 +492,7 @@ function ScheduleCard({ id, isOwner, isMine }: { id: bigint; isOwner: boolean; i
             ))}
           </div>
         )}
+        <ScheduleTransactionHistory vaultAddress={contractConfig.address} scheduleId={id} chainId={contractConfig.chainId} />
       </div>
     </>
   )
@@ -400,56 +529,85 @@ function GlossaryBar() {
 }
 
 // ─── CreateScheduleForm ───────────────────────────────────────────────────────
-function CreateScheduleForm({ onCreated }: { onCreated: () => void }) {
+function CreateScheduleForm({ onCreated, contractConfig = CONTRACT, usdcAddress = USDC_ADDRESS, usdcDecimals = USDC_DECIMALS, contractDeployed = CONTRACT_DEPLOYED, contractError = CONTRACT_CONFIG_ERROR }: {
+  onCreated: () => void
+  contractConfig?: VestingContractConfig
+  usdcAddress?: Address
+  usdcDecimals?: number
+  contractDeployed?: boolean
+  contractError?: string | null
+}) {
   const { address, chainId } = useAccount()
   const { switchChain } = useSwitchChain()
-  const [form, setForm] = useState({ beneficiary: '', amount: '', cliffDays: '30', vestingDays: '365' })
+  const chainTime = useChainTime()
+  const [form, setForm] = useState({ beneficiary: '', amount: '', cliffValue: '30', cliffUnit: 'days' as DurationUnit, vestingValue: '365', vestingUnit: 'days' as DurationUnit })
   const [step, setStep] = useState<'idle' | 'approve' | 'create'>('idle')
 
   const { writeContract: approve, data: approveTx, isPending: approvePending } = useWriteContract()
   const { isSuccess: approveSuccess } = useWaitForTransactionReceipt({ hash: approveTx })
   const { writeContract: create, data: createTx, isPending: createPending } = useWriteContract()
-  const { isLoading: createConfirming, isSuccess: createSuccess } = useWaitForTransactionReceipt({ hash: createTx })
+  const { data: createReceipt, isLoading: createConfirming, isSuccess: createSuccess } = useWaitForTransactionReceipt({ hash: createTx })
 
   useEffect(() => {
     if (createSuccess) {
+      if (createReceipt && address) {
+        appendLocalVestingRecords(decodeConfirmedVestingReceipt({
+          chainId: contractConfig.chainId,
+          wallet: address,
+          vaultAddress: contractConfig.address,
+        }, createReceipt))
+      }
       toast.success('Vesting schedule created!', {
-        action: createTx ? { label: 'Explorer', onClick: () => window.open(buildTxExplorerUrl(CHAIN_ID, createTx), '_blank') } : undefined,
+        action: createTx ? { label: 'Explorer', onClick: () => window.open(buildTxExplorerUrl(contractConfig.chainId, createTx), '_blank') } : undefined,
       })
       setStep('idle')
-      setForm({ beneficiary: '', amount: '', cliffDays: '30', vestingDays: '365' })
+      setForm({ beneficiary: '', amount: '', cliffValue: '30', cliffUnit: 'days', vestingValue: '365', vestingUnit: 'days' })
       onCreated()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createSuccess])
+  }, [address, contractConfig.address, contractConfig.chainId, createReceipt, createSuccess, createTx, onCreated])
 
-  const isWrongChain = chainId !== CHAIN_ID
-  const parsedCliff = parseInt(form.cliffDays)
-  const parsedVesting = parseInt(form.vestingDays)
+  const isWrongChain = chainId !== contractConfig.chainId
+  const durationError = validateDurationPair(form.cliffValue, form.cliffUnit, form.vestingValue, form.vestingUnit)
+  const cliffSeconds = durationError ? undefined : durationToSeconds(form.cliffValue, form.cliffUnit)
+  const vestingSeconds = durationError ? undefined : durationToSeconds(form.vestingValue, form.vestingUnit)
+  const previewStart = BigInt(scheduleStartFromChainTime(chainTime))
+  const previewCliff = cliffSeconds === undefined ? undefined : previewStart + cliffSeconds
+  const previewEnd = vestingSeconds === undefined ? undefined : previewStart + vestingSeconds
+  const scheduleTimeError = durationError === undefined && cliffSeconds !== undefined && vestingSeconds !== undefined
+    ? validateScheduleTimes(previewStart, cliffSeconds, vestingSeconds)
+    : undefined
+  const validationError = durationError ?? scheduleTimeError
+  const formatPreviewTimestamp = (timestamp: bigint | undefined) => {
+    if (timestamp === undefined) return '—'
+    return isDisplayableTimestamp(timestamp) ? fmtTimestamp(Number(timestamp)) : 'Beyond calendar range'
+  }
   const isValid =
     form.beneficiary.startsWith('0x') && form.beneficiary.length === 42 &&
     parseFloat(form.amount) > 0 &&
-    parsedVesting > 0 && parsedCliff >= 0 && parsedCliff <= parsedVesting
+    validationError === undefined
 
   const handleApprove = () => {
-    if (isWrongChain) { switchChain({ chainId: CHAIN_ID }); return }
+    if (!contractDeployed) { toast.error(contractError ?? 'Vesting contract is not configured.'); return }
+    if (isWrongChain) { switchChain({ chainId: contractConfig.chainId }); return }
     if (!isValid) return
     try {
-      const rawAmount = parseUnitsExact(form.amount, USDC_DECIMALS)
-      approve({ address: USDC_ADDRESS, abi: erc20Abi, functionName: 'approve', args: [CONTRACT.address, rawAmount], chainId: CHAIN_ID })
+      const rawAmount = parseUnitsExact(form.amount, usdcDecimals)
+      approve({ address: usdcAddress, abi: erc20Abi, functionName: 'approve', args: [contractConfig.address, rawAmount], chainId: contractConfig.chainId })
       setStep('approve')
     } catch (e) { toast.error(parseOnchainError(e)) }
   }
 
   const handleCreate = () => {
+    if (!contractDeployed) { toast.error(contractError ?? 'Vesting contract is not configured.'); return }
     if (!isValid) return
     try {
-      const rawAmount = parseUnitsExact(form.amount, USDC_DECIMALS)
-      const now = getNow()
+      const rawAmount = parseUnitsExact(form.amount, usdcDecimals)
+      if (cliffSeconds === undefined || vestingSeconds === undefined) return
       create({
-        ...CONTRACT,
+        ...contractConfig,
         functionName: 'createSchedule',
-        args: [form.beneficiary as `0x${string}`, rawAmount, BigInt(parsedCliff * 86400), BigInt(parsedVesting * 86400), BigInt(now)],
+        args: [form.beneficiary as `0x${string}`, rawAmount, cliffSeconds, vestingSeconds, previewStart],
       })
       setStep('create')
     } catch (e) { toast.error(parseOnchainError(e)) }
@@ -464,6 +622,11 @@ function CreateScheduleForm({ onCreated }: { onCreated: () => void }) {
         <h2 className="display text-lg font-bold" style={{ color: 'var(--ink)' }}>New Vesting Schedule</h2>
         <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>Cliff + linear unlock. USDC is pulled from your wallet on creation.</p>
       </div>
+      {!contractDeployed && (
+        <div className="rounded-xl border px-3 py-2 text-sm" style={{ borderColor: 'rgba(234,179,8,0.3)', color: 'var(--text)' }}>
+          {contractError ?? 'Vesting contract is not configured for this network.'}
+        </div>
+      )}
       <div className="flex flex-col gap-3">
         <label className="flex flex-col gap-1">
           <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: 'var(--subtle)' }}>Beneficiary address</span>
@@ -485,28 +648,57 @@ function CreateScheduleForm({ onCreated }: { onCreated: () => void }) {
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1">
             <span className="flex items-center text-xs font-semibold tracking-widest uppercase" style={{ color: 'var(--subtle)' }}>
-              Cliff (days)<Tooltip text="No tokens unlock before this many days. Set to 0 for no cliff." />
+              Cliff duration<Tooltip text="No tokens unlock before this duration. Set to 0 for no cliff." />
             </span>
-            <input type="number" min="0" value={form.cliffDays}
-              onChange={e => setForm(f => ({ ...f, cliffDays: e.target.value }))}
-              className="rounded-xl px-4 py-3 text-sm font-medium tabular-nums outline-none"
-              style={{ background: 'var(--surface-elevated)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+            <div className="flex gap-2">
+              <input type="number" min="0" step="1" value={form.cliffValue}
+                onChange={e => setForm(f => ({ ...f, cliffValue: e.target.value }))}
+                className="min-w-0 flex-1 rounded-xl px-3 py-3 text-sm font-medium tabular-nums outline-none"
+                style={{ background: 'var(--surface-elevated)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+              <select value={form.cliffUnit} aria-label="Cliff duration unit"
+                onChange={e => setForm(f => ({ ...f, cliffUnit: e.target.value as DurationUnit }))}
+                className="rounded-xl px-2 py-3 text-xs font-semibold outline-none"
+                style={{ background: 'var(--surface-elevated)', border: '1px solid var(--border)', color: 'var(--ink)' }}>
+                <option value="minutes">Minutes</option>
+                <option value="hours">Hours</option>
+                <option value="days">Days</option>
+              </select>
+            </div>
           </label>
           <label className="flex flex-col gap-1">
             <span className="flex items-center text-xs font-semibold tracking-widest uppercase" style={{ color: 'var(--subtle)' }}>
-              Vesting (days)<Tooltip text="Total duration over which tokens unlock linearly after the cliff." />
+              Vesting duration<Tooltip text="Total duration over which tokens unlock linearly after the cliff." />
             </span>
-            <input type="number" min="1" value={form.vestingDays}
-              onChange={e => setForm(f => ({ ...f, vestingDays: e.target.value }))}
-              className="rounded-xl px-4 py-3 text-sm font-medium tabular-nums outline-none"
-              style={{ background: 'var(--surface-elevated)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+            <div className="flex gap-2">
+              <input type="number" min="1" step="1" value={form.vestingValue}
+                onChange={e => setForm(f => ({ ...f, vestingValue: e.target.value }))}
+                className="min-w-0 flex-1 rounded-xl px-3 py-3 text-sm font-medium tabular-nums outline-none"
+                style={{ background: 'var(--surface-elevated)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+              <select value={form.vestingUnit} aria-label="Vesting duration unit"
+                onChange={e => setForm(f => ({ ...f, vestingUnit: e.target.value as DurationUnit }))}
+                className="rounded-xl px-2 py-3 text-xs font-semibold outline-none"
+                style={{ background: 'var(--surface-elevated)', border: '1px solid var(--border)', color: 'var(--ink)' }}>
+                <option value="minutes">Minutes</option>
+                <option value="hours">Hours</option>
+                <option value="days">Days</option>
+              </select>
+            </div>
           </label>
         </div>
-        {parsedCliff > parsedVesting && (
+        {validationError && (
           <p className="text-xs rounded-xl px-3 py-2" style={{ background: 'var(--danger-dim)', color: 'var(--danger)', border: '1px solid rgba(248,113,113,0.2)' }}>
-            Cliff cannot be longer than the total vesting period.
+            {validationError}
           </p>
         )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl px-4 py-3 text-xs" style={{ background: 'var(--surface-elevated)', border: '1px solid var(--border)' }}>
+        <span style={{ color: 'var(--subtle)' }}>Beneficiary</span><span className="mono truncate text-right" style={{ color: 'var(--ink-2)' }}>{form.beneficiary || '—'}</span>
+        <span style={{ color: 'var(--subtle)' }}>Total USDC</span><span className="tabular-nums text-right" style={{ color: 'var(--ink-2)' }}>{form.amount || '—'} USDC</span>
+        <span style={{ color: 'var(--subtle)' }}>Vesting start</span><span className="text-right" style={{ color: 'var(--ink-2)' }}>{formatPreviewTimestamp(previewStart)}</span>
+        <span style={{ color: 'var(--subtle)' }}>Cliff unlock</span><span className="text-right" style={{ color: 'var(--ink-2)' }}>{formatPreviewTimestamp(previewCliff)}</span>
+        <span style={{ color: 'var(--subtle)' }}>Vesting completion</span><span className="text-right" style={{ color: 'var(--ink-2)' }}>{formatPreviewTimestamp(previewEnd)}</span>
+        <span style={{ color: 'var(--subtle)' }}>Contract</span><span className="mono truncate text-right" style={{ color: 'var(--ink-2)' }}>{fmtAddr(contractConfig.address)}</span>
       </div>
 
       <div className="flex items-center gap-3">
@@ -538,31 +730,35 @@ function CreateScheduleForm({ onCreated }: { onCreated: () => void }) {
           </button>
         )}
       </div>
-      {address && <p className="text-xs text-center" style={{ color: 'var(--subtle)' }}>Connected as <span className="mono">{fmtAddr(address)}</span></p>}
     </div>
   )
 }
 
 // ─── ScheduleLookup ───────────────────────────────────────────────────────────
-function ScheduleLookup({ refreshKey }: { refreshKey: number }) {
+function ScheduleLookup({ refreshKey, contractConfig = CONTRACT, contractDeployed = CONTRACT_DEPLOYED, contractError = CONTRACT_CONFIG_ERROR }: {
+  refreshKey: number
+  contractConfig?: VestingContractConfig
+  contractDeployed?: boolean
+  contractError?: string | null
+}) {
   const [input, setInput] = useState('')
   const [ids, setIds] = useState<bigint[] | null>(null)
   const [isOwner, setIsOwner] = useState(false)
   const [isMine, setIsMine] = useState(false)
+  const [lookupNonce, setLookupNonce] = useState(0)
   const { address } = useAccount()
 
   const { refetch: fetchByAddress } = useReadContract({
-    ...CONTRACT, functionName: 'getScheduleIds', args: [input as `0x${string}`], query: { enabled: false },
+    ...contractConfig, functionName: 'getScheduleIds', args: [input as `0x${string}`], query: { enabled: false },
   })
-  const { data: ownerAddr } = useReadContract({ ...CONTRACT, functionName: 'owner' })
+  const { data: ownerAddr } = useReadContract({ ...contractConfig, functionName: 'owner' })
 
-  const doLookup = async (addr: string, mine: boolean) => {
+  const doLookup = (addr: string, mine: boolean) => {
     if (!addr.startsWith('0x') || addr.length !== 42) { toast.error('Enter a valid 0x address'); return }
-    const res = await fetchByAddress()
-    const fetched = res.data as bigint[] | undefined
-    setIds(fetched ?? [])
+    setInput(addr)
     setIsMine(mine)
     setIsOwner(address?.toLowerCase() === (ownerAddr as string | undefined)?.toLowerCase())
+    setLookupNonce(n => n + 1)
   }
 
   const handleLookup = () => void doLookup(input, false)
@@ -573,9 +769,12 @@ function ScheduleLookup({ refreshKey }: { refreshKey: number }) {
   }
 
   useEffect(() => {
-    if (refreshKey > 0 && ids !== null && input) void doLookup(input, isMine)
+    if (lookupNonce === 0 || !input) return
+    void fetchByAddress().then(res => {
+      setIds((res.data as bigint[] | undefined) ?? [])
+    }).catch(() => setIds([]))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey])
+  }, [lookupNonce, refreshKey])
 
   return (
     <div className="flex flex-col gap-4">
@@ -605,7 +804,7 @@ function ScheduleLookup({ refreshKey }: { refreshKey: number }) {
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {ids.map(id => <ScheduleCard key={id.toString()} id={id} isOwner={isOwner} isMine={isMine} />)}
+            {ids.map(id => <ScheduleCard key={id.toString()} id={id} isOwner={isOwner} isMine={isMine} contractConfig={contractConfig} contractDeployed={contractDeployed} contractError={contractError} />)}
           </div>
         )
       )}
@@ -614,11 +813,59 @@ function ScheduleLookup({ refreshKey }: { refreshKey: number }) {
 }
 
 // ─── Page wrappers ────────────────────────────────────────────────────────────
+function DiscoveredVestingSchedules({ address, managedVault, isOwner }: { address: Address; managedVault?: Address; isOwner: boolean }) {
+  const { logs, loading, syncing, error, refresh } = useVestingEvents()
+  const directReads = useBeneficiaryVestingSchedules(address)
+  const directByKey = useMemo(() => new Map(
+    directReads.schedules.map(item => [`${item.vaultAddress.toLowerCase()}:${item.scheduleId.toString()}`, item]),
+  ), [directReads.schedules])
+  const refs = useMemo(() => {
+    const indexedRefs = selectMyVestingScheduleLogs(logs, address, isOwner ? managedVault : undefined)
+    return mergeScheduleRefs(directReads.refs, indexedRefs)
+  }, [address, directReads.refs, isOwner, logs, managedVault])
+
+  if (directReads.error && refs.length === 0 && !directReads.isLoading && !loading && !syncing) {
+    return <p className="text-xs" style={{ color: 'var(--muted)' }}>Vesting schedules are temporarily unavailable. <button onClick={directReads.refresh} className="font-semibold" style={{ color: 'var(--accent)', background: 'none', border: 0, padding: 0 }}>Retry</button></p>
+  }
+  if ((loading || syncing) && refs.length === 0) return <p className="text-xs" style={{ color: 'var(--muted)' }}>Loading vesting schedules…</p>
+  if (directReads.isLoading && refs.length === 0) return <p className="text-xs" style={{ color: 'var(--muted)' }}>Reading vesting schedules across supported vaults...</p>
+  if (error && refs.length === 0 && !loading && !syncing) {
+    return <p className="text-xs" style={{ color: 'var(--muted)' }}>Vesting history is temporarily unavailable. <button onClick={refresh} className="font-semibold" style={{ color: 'var(--accent)', background: 'none', border: 0, padding: 0 }}>Retry</button></p>
+  }
+  if (refs.length === 0) return null
+
+  return <div className="flex flex-col gap-3">
+    {directReads.error && <p className="text-xs" style={{ color: 'var(--muted)' }}>Some schedule details are temporarily unavailable. <button onClick={directReads.refresh} className="font-semibold" style={{ color: 'var(--accent)', background: 'none', border: 0, padding: 0 }}>Retry</button></p>}
+    <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--subtle)' }}>{isOwner ? 'Managed and beneficiary schedules' : 'Discovered schedules'}</p>
+    {refs.map(log => {
+      const direct = directByKey.get(`${log.vaultAddress.toLowerCase()}:${log.scheduleId.toString()}`)
+      return <ScheduleCard
+        key={`${log.vaultAddress}-${log.scheduleId.toString()}`}
+        id={log.scheduleId}
+        isOwner={isOwner && managedVault?.toLowerCase() === log.vaultAddress.toLowerCase()}
+        isMine
+        contractConfig={{ ...CONTRACT, address: log.vaultAddress }}
+        contractDeployed
+        contractError={null}
+        prefetchedSchedule={direct?.schedule}
+        prefetchedClaimable={direct?.claimable}
+        onUpdated={direct ? directReads.refresh : undefined}
+      />
+    })}
+  </div>
+}
+
 function MyVestingPage({ refreshKey }: { refreshKey: number }) {
   const navigate = useNavigate()
-  const { data: ownerAddr } = useReadContract({ ...CONTRACT, functionName: 'owner' })
   const { address, isConnected } = useAccount()
-  const isOwner = !!address && address.toLowerCase() === (ownerAddr as string | undefined)?.toLowerCase()
+  const vault = useUserVestingVault()
+  const activeContract = vault.contract ?? CONTRACT
+  const { data: ownerAddr } = useReadContract({ ...activeContract, functionName: 'owner', query: { enabled: vault.vaultAddress !== undefined } })
+  const { data: legacyOwnerAddr } = useReadContract({ ...CONTRACT, functionName: 'owner', query: { enabled: vault.vaultAddress === undefined } })
+  const isOwner = vault.vaultAddress !== undefined
+    ? isSelfServiceVaultOwner(address, ownerAddr as string | undefined)
+    : isSelfServiceVaultOwner(address, legacyOwnerAddr as string | undefined)
+  const managedVault = vault.vaultAddress ?? (isOwner ? CONTRACT_ADDRESS : undefined)
 
   if (!isConnected) {
     return (
@@ -644,7 +891,7 @@ function MyVestingPage({ refreshKey }: { refreshKey: number }) {
           <h2 className="display text-xl font-bold" style={{ color: 'var(--ink)' }}>My Vesting</h2>
           <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>Look up vesting schedules by beneficiary address</p>
         </div>
-        {isOwner && (
+        {isOwner ? (
           <button
             onClick={() => void navigate('/vesting/create')}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold"
@@ -652,25 +899,34 @@ function MyVestingPage({ refreshKey }: { refreshKey: number }) {
           >
             + New Schedule
           </button>
-        )}
+        ) : <VestingVaultSetup />}
       </div>
-      <ScheduleLookup refreshKey={refreshKey} />
+      <DiscoveredVestingSchedules address={address!} managedVault={managedVault} isOwner={isOwner} />
+      <ScheduleLookup refreshKey={refreshKey} contractConfig={activeContract} contractDeployed={vault.vaultAddress ? true : CONTRACT_DEPLOYED} contractError={vault.vaultAddress ? null : CONTRACT_CONFIG_ERROR} />
     </div>
   )
 }
 
 function CreateVestingPage({ onCreated }: { onCreated: () => void }) {
   const navigate = useNavigate()
-  const { data: ownerAddr } = useReadContract({ ...CONTRACT, functionName: 'owner' })
   const { address } = useAccount()
-  const isOwner = !!address && address.toLowerCase() === (ownerAddr as string | undefined)?.toLowerCase()
+  const vault = useUserVestingVault()
+  const activeContract = vault.contract
+  const { data: ownerAddr, isLoading: ownerLoading } = useReadContract({ ...(activeContract ?? CONTRACT), functionName: 'owner', query: { enabled: activeContract !== undefined } })
+  const { data: legacyOwnerAddr, isLoading: legacyOwnerLoading } = useReadContract({ ...CONTRACT, functionName: 'owner', query: { enabled: vault.vaultAddress === undefined } })
+  const isOwner = vault.vaultAddress !== undefined
+    ? isSelfServiceVaultOwner(address, ownerAddr as string | undefined)
+    : isSelfServiceVaultOwner(address, legacyOwnerAddr as string | undefined)
+  const formContract = vault.contract ?? (isOwner ? CONTRACT : undefined)
 
+  if (vault.isLoading || ownerLoading || legacyOwnerLoading) return <div className="px-6 py-8 max-w-2xl mx-auto"><p className="text-sm" style={{ color: 'var(--muted)' }}>Checking your vesting vault…</p></div>
+  if (!formContract) return <div className="px-6 py-8 max-w-2xl mx-auto"><VestingVaultSetup /></div>
   if (!isOwner) return (
     <div className="px-6 py-8 max-w-2xl mx-auto">
       <div className="flex flex-col items-center gap-3 py-12 text-center">
         <Lock size={28} style={{ color: 'var(--subtle)' }} />
         <p className="font-semibold" style={{ color: 'var(--ink)' }}>Owner access required</p>
-        <p className="text-sm" style={{ color: 'var(--muted)' }}>Only the contract owner can create vesting schedules.</p>
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>Your vault owner could not be verified onchain.</p>
       </div>
     </div>
   )
@@ -681,33 +937,48 @@ function CreateVestingPage({ onCreated }: { onCreated: () => void }) {
         <h2 className="display text-xl font-bold" style={{ color: 'var(--ink)' }}>Create Vesting Schedule</h2>
         <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>Lock USDC for a beneficiary with cliff + linear vesting</p>
       </div>
-      <CreateScheduleForm onCreated={() => { onCreated(); void navigate('/vesting') }} />
+      <CreateScheduleForm
+        contractConfig={formContract}
+        usdcAddress={vault.contract ? SELF_SERVICE_USDC_ADDRESS : USDC_ADDRESS}
+        usdcDecimals={vault.contract ? SELF_SERVICE_USDC_DECIMALS : USDC_DECIMALS}
+        onCreated={() => { onCreated(); void navigate('/vesting') }}
+      />
     </div>
   )
 }
 
 function BulkVestingPage({ onCreated }: { onCreated: () => void }) {
-  const { data: ownerAddr } = useReadContract({ ...CONTRACT, functionName: 'owner' })
   const { address } = useAccount()
-  const isOwner = !!address && address.toLowerCase() === (ownerAddr as string | undefined)?.toLowerCase()
+  const vault = useUserVestingVault()
+  const activeContract = vault.contract
+  const { data: ownerAddr, isLoading: ownerLoading } = useReadContract({ ...(activeContract ?? CONTRACT), functionName: 'owner', query: { enabled: activeContract !== undefined } })
+  const { data: legacyOwnerAddr, isLoading: legacyOwnerLoading } = useReadContract({ ...CONTRACT, functionName: 'owner', query: { enabled: vault.vaultAddress === undefined } })
+  const isOwner = vault.vaultAddress !== undefined
+    ? isSelfServiceVaultOwner(address, ownerAddr as string | undefined)
+    : isSelfServiceVaultOwner(address, legacyOwnerAddr as string | undefined)
+  const bulkContract = vault.contract ?? (isOwner ? CONTRACT : undefined)
 
+  if (vault.isLoading || ownerLoading || legacyOwnerLoading) return <div className="px-6 py-8 max-w-2xl mx-auto"><p className="text-sm" style={{ color: 'var(--muted)' }}>Checking your vesting vault…</p></div>
+  if (!bulkContract) return <div className="px-6 py-8 max-w-2xl mx-auto"><VestingVaultSetup /></div>
   if (!isOwner) return (
     <div className="px-6 py-8 max-w-2xl mx-auto">
       <div className="flex flex-col items-center gap-3 py-12 text-center">
         <Lock size={28} style={{ color: 'var(--subtle)' }} />
         <p className="font-semibold" style={{ color: 'var(--ink)' }}>Owner access required</p>
-        <p className="text-sm" style={{ color: 'var(--muted)' }}>Only the contract owner can create bulk vesting schedules.</p>
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>Your vault owner could not be verified onchain.</p>
       </div>
     </div>
   )
 
   return (
     <div className="px-6 py-6 max-w-2xl mx-auto w-full">
-      <div className="mb-6">
-        <h2 className="display text-xl font-bold" style={{ color: 'var(--ink)' }}>Bulk Vesting</h2>
-        <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>Import a CSV or paste addresses to vest for multiple recipients at once</p>
-      </div>
-      <BulkVesting onCreated={onCreated} />
+      <BulkVesting
+        onCreated={onCreated}
+        contractConfig={bulkContract}
+        usdcAddress={vault.contract ? SELF_SERVICE_USDC_ADDRESS : USDC_ADDRESS}
+        usdcDecimals={vault.contract ? SELF_SERVICE_USDC_DECIMALS : USDC_DECIMALS}
+        chainId={vault.contract ? SELF_SERVICE_CHAIN_ID : bulkContract.chainId}
+      />
     </div>
   )
 }
@@ -725,13 +996,14 @@ function TimelinePage() {
 }
 
 function TreasuryPage() {
+  const vault = useUserVestingVault()
   return (
     <div className="px-6 py-6 max-w-3xl mx-auto w-full">
       <div className="mb-6">
         <h2 className="display text-xl font-bold" style={{ color: 'var(--ink)' }}>Treasury</h2>
         <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>USDC allocation overview and beneficiary breakdown</p>
       </div>
-      <TreasuryDashboard />
+      {vault.isLoading ? <p className="text-sm" style={{ color: 'var(--muted)' }}>Checking your vesting vault…</p> : <TreasuryDashboard vaultAddress={vault.vaultAddress ?? CONTRACT_ADDRESS} />}
     </div>
   )
 }
@@ -742,18 +1014,49 @@ function AppRoutes() {
   const triggerRefresh = () => setRefreshKey(k => k + 1)
 
   return (
-    <AppShell onRefresh={triggerRefresh}>
-      <Routes>
-        <Route path="/"                 element={<OverviewPage refreshKey={refreshKey} />} />
-        <Route path="/vesting"          element={<MyVestingPage refreshKey={refreshKey} />} />
-        <Route path="/vesting/create"   element={<CreateVestingPage onCreated={triggerRefresh} />} />
-        <Route path="/vesting/bulk"     element={<BulkVestingPage onCreated={triggerRefresh} />} />
-        <Route path="/vesting/timeline" element={<TimelinePage />} />
-        <Route path="/vesting/team"     element={<MyVestingPage refreshKey={refreshKey} />} />
-        <Route path="/treasury"         element={<TreasuryPage />} />
-        <Route path="/granthub/*"       element={<GrantHubWrapper />} />
-        <Route path="*"                 element={<Navigate to="/" replace />} />
-      </Routes>
+    <Routes>
+      <Route path={LANDING_PATH} element={<LandingPage />} />
+      <Route element={<WorkspaceShell onRefresh={triggerRefresh} />}>
+        {/* Explicit workspace namespace. */}
+        <Route path="app"                 element={<OverviewPage refreshKey={refreshKey} />} />
+        <Route path="app/activity"          element={<ActivityPage />} />
+        <Route path="app/vesting"          element={<MyVestingPage refreshKey={refreshKey} />} />
+        <Route path="app/vesting/create"   element={<CreateVestingPage onCreated={triggerRefresh} />} />
+        <Route path="app/vesting/bulk"     element={<BulkVestingPage onCreated={triggerRefresh} />} />
+        <Route path="app/vesting/timeline" element={<TimelinePage />} />
+        <Route path="app/vesting/team"     element={<TeamManagementPage />} />
+        <Route path="app/treasury"         element={<TreasuryPage />} />
+        <Route path="app/analytics"        element={<AnalyticsPage />} />
+        <Route path="app/reports"          element={<ReportsPage />} />
+        <Route path="app/settings"         element={<SettingsPage />} />
+        <Route path="app/help"             element={<HelpPage />} />
+        <Route path="app/granthub/*"       element={<GrantHubWrapper />} />
+
+        {/* Existing paths remain valid for bookmarks and internal links. */}
+        <Route path="activity"          element={<ActivityPage />} />
+        <Route path="vesting"          element={<MyVestingPage refreshKey={refreshKey} />} />
+        <Route path="vesting/create"   element={<CreateVestingPage onCreated={triggerRefresh} />} />
+        <Route path="vesting/bulk"     element={<BulkVestingPage onCreated={triggerRefresh} />} />
+        <Route path="vesting/timeline" element={<TimelinePage />} />
+        <Route path="vesting/team"     element={<TeamManagementPage />} />
+        <Route path="treasury"         element={<TreasuryPage />} />
+        <Route path="analytics"        element={<AnalyticsPage />} />
+        <Route path="reports"          element={<ReportsPage />} />
+        <Route path="settings"         element={<SettingsPage />} />
+        <Route path="help"             element={<HelpPage />} />
+        <Route path="granthub/*"       element={<GrantHubWrapper />} />
+
+        <Route path="app/*" element={<Navigate to={APP_PATH} replace />} />
+        <Route path="*" element={<Navigate to={LANDING_PATH} replace />} />
+      </Route>
+    </Routes>
+  )
+}
+
+function WorkspaceShell({ onRefresh }: { onRefresh: () => void }) {
+  return (
+    <AppShell onRefresh={onRefresh}>
+      <Outlet />
     </AppShell>
   )
 }

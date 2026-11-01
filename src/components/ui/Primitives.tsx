@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react'
-import { Info, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Lock, Unlock } from 'lucide-react'
+import { Info, ChevronDown, ChevronUp, CheckCircle2, XCircle, Lock, Unlock } from 'lucide-react'
 import type { ScheduleStatus } from '@/types'
 
 // ─── Tooltip ─────────────────────────────────────────────────────────────────
@@ -27,8 +27,8 @@ export function Tooltip({ text }: { text: string }) {
       </button>
       {show && (
         <span
-          className="absolute z-20 left-5 top-0 w-56 rounded-xl px-3 py-2 text-xs shadow-lg"
-          style={{ background: 'var(--ink)', color: 'white', lineHeight: '1.5' }}
+          className="absolute z-20 left-5 top-0 w-56 px-3 py-2 text-xs"
+          style={{ background: 'var(--surface-elevated)', color: 'var(--ink)', border: '1px solid var(--border)', borderRadius: 'var(--radius-menu)', boxShadow: '0 12px 24px rgba(0,0,0,0.28)', lineHeight: '1.5' }}
         >
           {text}
         </span>
@@ -47,7 +47,7 @@ export function StatusBadge({ status }: { status: ScheduleStatus }) {
   }
   const { label, bg, color, icon } = map[status]
   return (
-    <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: bg, color }}>
+    <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5" style={{ background: bg, color, borderRadius: 'var(--radius-control)' }}>
       {icon}{label}
     </span>
   )
@@ -76,11 +76,11 @@ export function MiniProgressBar({ value, color }: { value: number; color?: strin
 export function Card({ children, danger, className = '' }: { children: ReactNode; danger?: boolean; className?: string }) {
   return (
     <div
-      className={`rounded-2xl flex flex-col ${className}`}
+      className={`flex flex-col ${className}`}
       style={{
-        background: 'var(--surface-strong)',
+        background: 'var(--surface)',
         border: `1px solid ${danger ? 'rgba(186,43,76,0.25)' : 'var(--border)'}`,
-        boxShadow: '0 1px 4px rgba(18,45,69,0.07)',
+        borderRadius: 'var(--radius-card)',
       }}
     >
       {children}
@@ -93,7 +93,7 @@ export function MetricTile({
   label, value, sub, accent, tooltip,
 }: { label: string; value: string; sub?: string; accent?: string; tooltip?: string }) {
   return (
-    <div className="rounded-xl p-4 flex flex-col gap-1" style={{ background: 'var(--surface-muted)' }}>
+    <div className="p-4 flex flex-col gap-1" style={{ background: 'var(--surface-muted)', borderRadius: 'var(--radius-card)' }}>
       <span className="flex items-center text-xs font-medium uppercase tracking-widest" style={{ color: 'var(--subtle)' }}>
         {label}
         {tooltip && <Tooltip text={tooltip} />}
@@ -110,7 +110,7 @@ export function Collapsible({ label, children, defaultOpen = false }: {
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--surface-strong)' }}>
+    <div className="overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--surface-strong)', borderRadius: 'var(--radius-card)' }}>
       <button
         onClick={() => setOpen(v => !v)}
         className="flex items-center justify-between w-full px-4 py-3 text-xs font-semibold"
@@ -142,36 +142,22 @@ export function SectionHeader({ title, sub, action }: { title: string; sub?: str
 }
 
 // ─── IndexerBanner ───────────────────────────────────────────────────────────
-export function IndexerBanner({ progress, error, indexedBlock, headBlock }: {
-  progress: number; error: string | null; indexedBlock: bigint; headBlock: bigint
+export function IndexerBanner({ error, onRetry }: {
+  progress?: number; error: string | null; indexedBlock?: bigint; headBlock?: bigint; onRetry?: () => void
 }) {
-  if (error) {
-    return (
-      <div className="rounded-xl px-3 py-2 text-xs" style={{ background: 'rgba(186,43,76,0.06)', border: '1px solid rgba(186,43,76,0.15)', color: 'var(--danger)' }}>
-        Event indexing error: {error}. Some history may be incomplete.
-      </div>
-    )
-  }
-  if (progress < 100) {
-    const behind = headBlock - indexedBlock
-    return (
-      <div className="rounded-xl px-3 py-2 text-xs flex items-center gap-2" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
-        <Clock size={12} className="shrink-0" />
-        Indexing onchain history… {progress}% ({behind.toLocaleString()} blocks remaining)
-        <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-          <div className="h-full rounded-full" style={{ width: `${progress}%`, background: 'var(--accent)' }} />
-        </div>
-      </div>
-    )
-  }
-  return null
+  if (!error) return null
+  return (
+    <div className="rounded-xl px-3 py-2 text-xs flex items-center gap-2" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
+      <span className="flex-1">{error}</span>
+      <span className="sr-only">{error}</span>
+      {onRetry && <button onClick={onRetry} className="font-semibold shrink-0" style={{ color: 'var(--accent)' }}>Retry</button>}
+    </div>
+  )
 }
-
-// ─── EmptyState ──────────────────────────────────────────────────────────────
 export function EmptyState({ icon, title, sub }: { icon: ReactNode; title: string; sub?: string }) {
   return (
     <div className="flex flex-col items-center gap-3 py-12 text-center">
-      <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: 'var(--surface-muted)', color: 'var(--subtle)' }}>
+      <div className="w-12 h-12 flex items-center justify-center" style={{ background: 'var(--surface-muted)', color: 'var(--subtle)', borderRadius: 'var(--radius-card)' }}>
         {icon}
       </div>
       <div>

@@ -5,8 +5,10 @@
  */
 import { Database } from 'bun:sqlite'
 import path from 'path'
+import { randomUUID } from 'crypto'
+import { ensureVestingIndexSchema } from './vestingStorage'
 
-const DB_PATH = path.join(import.meta.dir, '../.granthub.db')
+const DB_PATH = process.env.GRANTHUB_DB_PATH ?? path.join(import.meta.dir, '../.granthub.db')
 
 // ── Singleton ──────────────────────────────────────────────────────────────────
 export const db: Database = new Database(DB_PATH, { create: true })
@@ -196,54 +198,178 @@ if (currentVersion() < 2) {
 // This migration is idempotent: IF NOT EXISTS guards prevent re-runs from
 // failing on a fresh database where v2 already used the corrected schema.
 if (currentVersion() < 3) {
-  // Only ADD COLUMN if created_at doesn't already exist (SQLite < 3.37 has no ADD IF NOT EXISTS)
-  type ColInfo = { name: string }
-  const existingCols = db.prepare<ColInfo, string>(
-    `SELECT name FROM pragma_table_info('applications') WHERE name = 'created_at'`
-  ).get('created_at')
-  if (!existingCols) {
+  // Only ADD COLUMN if created_at doesn't already exist (SQLite < 3.37 has no ADD IF NOT EXISTS).
+  // The v2 schema in this checkout is already corrected; skip the table rebuild in
+  // that case so upgrading a live database does not touch existing application rows.
+  type ColInfo = { name: string; not_null: number }
+  const columns = db.prepare<ColInfo, string>(
+    `SELECT name, "notnull" AS not_null FROM pragma_table_info('applications')`,
+  ).all()
+  const hasCreatedAt = columns.some(col => col.name === 'created_at')
+  const submittedAt = columns.find(col => col.name === 'submitted_at')
+  if (!hasCreatedAt) {
     db.exec(`ALTER TABLE applications ADD COLUMN created_at INTEGER`)
   }
-  db.exec(`
-    -- Back-fill created_at from updated_at for any existing rows
-    UPDATE applications SET created_at = updated_at WHERE created_at IS NULL;
+  const needsRebuild = !hasCreatedAt || submittedAt?.not_null !== 0
+  if (needsRebuild) {
+    // SQLite cannot drop a NOT NULL constraint in-place. Foreign keys are
+    // temporarily disabled only for this table swap; they are restored even
+    // when the migration throws, and the referenced rows are copied verbatim.
+    db.exec(`PRAGMA foreign_keys=OFF`)
+    try {
+      db.exec(`
+        UPDATE applications SET created_at = updated_at WHERE created_at IS NULL;
 
-    -- SQLite table-rebuild to drop the NOT NULL constraint on submitted_at.
-    -- Steps: create new table, copy data, drop old, rename new.
-    CREATE TABLE IF NOT EXISTS applications_v3 (
-      id              TEXT PRIMARY KEY,
-      grant_id        TEXT NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
-      applicant_addr  TEXT NOT NULL,
-      project_name    TEXT NOT NULL DEFAULT '',
-      summary         TEXT NOT NULL DEFAULT '',
-      problem         TEXT NOT NULL DEFAULT '',
-      solution        TEXT NOT NULL DEFAULT '',
-      milestones      TEXT NOT NULL DEFAULT '[]',
-      requested_raw   INTEGER NOT NULL DEFAULT 0,
-      status          TEXT NOT NULL DEFAULT 'draft',
-      submitted_at    INTEGER,
-      created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at      INTEGER NOT NULL
-    );
-    INSERT OR IGNORE INTO applications_v3
-      SELECT id, grant_id, applicant_addr, project_name, summary, problem,
-             solution, milestones, requested_raw, status,
-             CASE WHEN submitted_at = 0 THEN NULL ELSE submitted_at END,
-             COALESCE(created_at, updated_at),
-             updated_at
-      FROM applications;
-    DROP TABLE applications;
-    ALTER TABLE applications_v3 RENAME TO applications;
+        DROP TABLE IF EXISTS applications_v3;
+        CREATE TABLE applications_v3 (
+          id              TEXT PRIMARY KEY,
+          grant_id        TEXT NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
+          applicant_addr  TEXT NOT NULL,
+          project_name    TEXT NOT NULL DEFAULT '',
+          summary         TEXT NOT NULL DEFAULT '',
+          problem         TEXT NOT NULL DEFAULT '',
+          solution        TEXT NOT NULL DEFAULT '',
+          milestones      TEXT NOT NULL DEFAULT '[]',
+          requested_raw   INTEGER NOT NULL DEFAULT 0,
+          status          TEXT NOT NULL DEFAULT 'draft',
+          submitted_at    INTEGER,
+          created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at      INTEGER NOT NULL
+        );
+        INSERT INTO applications_v3
+          SELECT id, grant_id, applicant_addr, project_name, summary, problem,
+                 solution, milestones, requested_raw, status,
+                 CASE WHEN submitted_at = 0 THEN NULL ELSE submitted_at END,
+                 COALESCE(created_at, updated_at),
+                 updated_at
+          FROM applications;
+        DROP TABLE applications;
+        ALTER TABLE applications_v3 RENAME TO applications;
 
-    -- Re-create index (dropped with old table)
-    CREATE INDEX IF NOT EXISTS idx_apps_grant     ON applications(grant_id);
-    CREATE INDEX IF NOT EXISTS idx_apps_applicant ON applications(applicant_addr);
-  `)
+        CREATE INDEX IF NOT EXISTS idx_apps_grant     ON applications(grant_id);
+        CREATE INDEX IF NOT EXISTS idx_apps_applicant ON applications(applicant_addr);
+      `)
+    } finally {
+      db.exec(`PRAGMA foreign_keys=ON`)
+    }
+  }
   bumpVersion(3)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-import { randomUUID } from 'crypto'
+// v4: bind grants to deployed pools and record independently verified deposits.
+if (currentVersion() < 4) {
+  type ColumnInfo = { name: string }
+  const grantColumns = db.prepare<ColumnInfo, string>(
+    `SELECT name FROM pragma_table_info('grants')`,
+  ).all()
+  const depositColumns = db.prepare<ColumnInfo, string>(
+    `SELECT name FROM pragma_table_info('deposits')`,
+  ).all()
+  const hasGrantColumn = (name: string) => grantColumns.some(col => col.name === name)
+  const hasDepositColumn = (name: string) => depositColumns.some(col => col.name === name)
+
+  if (!hasGrantColumn('pool_contract_address')) {
+    db.exec(`ALTER TABLE grants ADD COLUMN pool_contract_address TEXT`)
+  }
+  if (!hasGrantColumn('pool_chain_id')) {
+    db.exec(`ALTER TABLE grants ADD COLUMN pool_chain_id INTEGER`)
+  }
+  if (!hasDepositColumn('verified')) {
+    db.exec(`ALTER TABLE deposits ADD COLUMN verified INTEGER NOT NULL DEFAULT 0`)
+  }
+  if (!hasDepositColumn('verified_chain_id')) {
+    db.exec(`ALTER TABLE deposits ADD COLUMN verified_chain_id INTEGER`)
+  }
+  if (!hasDepositColumn('verified_pool_contract_address')) {
+    db.exec(`ALTER TABLE deposits ADD COLUMN verified_pool_contract_address TEXT`)
+  }
+  if (!hasDepositColumn('verified_token_address')) {
+    db.exec(`ALTER TABLE deposits ADD COLUMN verified_token_address TEXT`)
+  }
+  if (!hasDepositColumn('verified_at')) {
+    db.exec(`ALTER TABLE deposits ADD COLUMN verified_at INTEGER`)
+  }
+  const duplicateAwardTx = db.prepare<{ tx_hash: string; count: number }, []>(
+    `SELECT tx_hash, COUNT(*) as count FROM awards
+     WHERE tx_hash IS NOT NULL GROUP BY tx_hash HAVING COUNT(*) > 1`,
+  ).all()
+  if (duplicateAwardTx.length > 0) {
+    throw new Error('Cannot apply v4: duplicate award transaction hashes require manual reconciliation')
+  }
+  const duplicateGrantPools = db.prepare<{ pool_contract_address: string; count: number }, []>(
+    `SELECT lower(pool_contract_address) as pool_contract_address, COUNT(*) as count
+     FROM grants WHERE pool_contract_address IS NOT NULL
+     GROUP BY lower(pool_contract_address) HAVING COUNT(*) > 1`,
+  ).all()
+  if (duplicateGrantPools.length > 0) {
+    throw new Error('Cannot apply v4: a GrantPool address is configured for multiple grants')
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_awards_tx_hash_unique ON awards(tx_hash) WHERE tx_hash IS NOT NULL`)
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_grants_pool_address_unique
+    ON grants(lower(pool_contract_address)) WHERE pool_contract_address IS NOT NULL`)
+  bumpVersion(4)
+}
+
+// v5: complete GrantHub application records and persisted notifications.
+// All changes are additive so existing organizations, grants, applications,
+// reviews, awards, and deposits remain intact.
+if (currentVersion() < 5) {
+  type ColumnInfo = { name: string }
+  const hasColumn = (table: string, name: string) => db.prepare<ColumnInfo, string>(
+    `SELECT name FROM pragma_table_info(?) WHERE name = ?`,
+  ).get(table, name) != null
+  const addColumn = (table: string, name: string, definition: string) => {
+    if (!hasColumn(table, name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`)
+  }
+
+  addColumn('grants', 'funding_terms', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('grants', 'deliverables', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('grants', 'custom_questions', `TEXT NOT NULL DEFAULT '[]'`)
+  addColumn('grants', 'allow_multiple_applications', `INTEGER NOT NULL DEFAULT 0`)
+
+  addColumn('applications', 'applicant_name', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'email', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'country', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'applicant_type', `TEXT NOT NULL DEFAULT 'individual'`)
+  addColumn('applications', 'github_url', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'portfolio_url', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'project_category', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'development_stage', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'tech_stack', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'ecosystem_benefit', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'use_of_funds', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'budget_breakdown', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'completion_date', `INTEGER`)
+  addColumn('applications', 'previous_experience', `TEXT NOT NULL DEFAULT ''`)
+  addColumn('applications', 'custom_answers', `TEXT NOT NULL DEFAULT '{}'`)
+  addColumn('applications', 'attachments', `TEXT NOT NULL DEFAULT '[]'`)
+
+  addColumn('reviews', 'criteria_scores', `TEXT NOT NULL DEFAULT '{}'`)
+  addColumn('reviews', 'eligibility_checks', `TEXT NOT NULL DEFAULT '[]'`)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id             TEXT PRIMARY KEY,
+      recipient_addr TEXT NOT NULL,
+      type           TEXT NOT NULL,
+      entity_id      TEXT,
+      message        TEXT NOT NULL,
+      read           INTEGER NOT NULL DEFAULT 0,
+      created_at     INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_recipient
+      ON notifications(recipient_addr, read, created_at);
+  `)
+  bumpVersion(5)
+}
+
+// v6: persistent Vestros vesting-event index. This migration is additive and
+// intentionally leaves all GrantHub tables and existing WAL/SHM state intact.
+if (currentVersion() < 6) {
+  ensureVestingIndexSchema(db)
+  bumpVersion(6)
+}
 
 export function auditLog(
   actorAddr: string,
@@ -256,6 +382,18 @@ export function auditLog(
     `INSERT INTO audit_log (id,actor_addr,action,entity,entity_id,note,created_at)
      VALUES (?,?,?,?,?,?,unixepoch())`,
   ).run(randomUUID(), actorAddr.toLowerCase(), action, entity, entityId ?? null, note ?? null)
+}
+
+export function notify(
+  recipientAddr: string,
+  type: string,
+  entityId: string | undefined,
+  message: string,
+) {
+  db.prepare(
+    `INSERT INTO notifications (id,recipient_addr,type,entity_id,message,created_at)
+     VALUES (?,?,?,?,?,unixepoch())`,
+  ).run(randomUUID(), recipientAddr.toLowerCase(), type, entityId ?? null, message)
 }
 
 // Legacy shim: some callers import getDb() — keep it working

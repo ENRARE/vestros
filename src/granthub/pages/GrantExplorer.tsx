@@ -60,7 +60,7 @@ export function GrantExplorer() {
           Grant Explorer
         </h1>
         <p className="text-sm" style={{ color: 'var(--muted)' }}>
-          Discover and apply for USDC grants from leading organizations.
+          Discover and apply for USDC grants from leading organisations.
         </p>
       </div>
 
@@ -91,7 +91,7 @@ export function GrantExplorer() {
               <button
                 key={o.value}
                 onClick={() => setStatus(o.value)}
-                className="px-3 py-1 rounded-full text-xs font-medium transition-colors"
+                className="px-3 py-1 text-xs font-medium transition-colors"
                 style={{
                   background: status === o.value ? 'var(--accent)' : 'var(--surface-muted)',
                   color: status === o.value ? '#fff' : 'var(--muted)',
@@ -126,7 +126,7 @@ export function GrantExplorer() {
           >
             <option value="created_at">Newest</option>
             <option value="deadline">Deadline</option>
-            <option value="budget">Budget</option>
+            <option value="declared_budget">Budget</option>
           </select>
         </div>
       </div>

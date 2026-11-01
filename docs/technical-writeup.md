@@ -226,7 +226,7 @@ All reverts use named custom errors (`ZeroBeneficiary`, `AlreadyRevoked`, `Fully
 | Invariant tests (stateful) | 3 |
 | **Total** | **68** |
 
-Key invariants verified across 256 runs × 500 handler calls each:
+Key invariants are covered by the three invariant tests; this audit re-ran them at 16 runs × 32 handler calls each. The repository's default 256 × 500 configuration is computationally impractical for the current schedule-scanning handler:
 - `contractBalance >= totalDeposited - totalWithdrawn` (no funds leak)
 - `vestedAmount <= totalAmount` for every schedule at every timestamp
 - `claimedAmount <= totalAmount` for every schedule

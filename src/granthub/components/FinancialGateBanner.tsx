@@ -2,9 +2,7 @@ import { GRANTHUB_FINANCIAL_ENABLED } from '../feature-flags'
 import { ShieldAlert } from 'lucide-react'
 
 /**
- * Shows an informational banner when GrantHub financial features
- * (deposits, award activation) are disabled by the VITE_GRANTHUB_FINANCIAL flag.
- * Renders nothing when the flag is enabled.
+ * Shows a compact notice only on financial operation surfaces.
  */
 export function FinancialGateBanner() {
   if (GRANTHUB_FINANCIAL_ENABLED) return null
@@ -19,10 +17,8 @@ export function FinancialGateBanner() {
     >
       <ShieldAlert size={16} className="mt-0.5 shrink-0" style={{ color: '#EAB308' }} />
       <span>
-        <strong>Funding features are currently paused.</strong>{' '}
-        Grant discovery, applications, and reviews are fully operational.
-        USDC deposits and award activation will be enabled after our external
-        security audit completes.
+        <strong>Financial actions are disabled by default.</strong>{' '}
+        Verified funding records remain read-only until authorization is enabled.
       </span>
     </div>
   )

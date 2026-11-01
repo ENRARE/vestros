@@ -3,15 +3,23 @@
  * Shows the vesting curve as a simple SVG line chart (no d3 dep needed).
  */
 import { useState, useMemo } from 'react'
-import { useReadContract } from 'wagmi'
+import { useAccount, useReadContract } from 'wagmi'
+import type { Abi, Address } from 'viem'
 import { ExternalLink, TrendingUp, AlertCircle } from 'lucide-react'
-import { CONTRACT, CHAIN_ID } from '@/contractConfig'
+import { CONTRACT } from '@/contractConfig'
 import { buildAddressExplorerUrl } from '@/onchain-facts'
 import { fmtUsdc, fmtDate, fmtAddr } from '@/formatters'
 import { computeVested, getStatus, pct } from '@/vestingMath'
 import { StatusBadge, ProgressBar, Card, SectionHeader, EmptyState } from '@/components/ui/Primitives'
 import type { VestingSchedule } from '@/types'
 import { useChainTime } from '@/hooks/useChainTime'
+import { useUserVestingVault } from '@/hooks/useUserVestingVault'
+import { useBeneficiaryVestingSchedules } from '@/hooks/useBeneficiaryVestingSchedules'
+import { useVestingEvents } from '@/hooks/useVestingEvents'
+import { selfServiceVestingContract } from '@/vestingFactoryConfig'
+import { selectTimelineSchedules, type TimelineScheduleRef } from '@/features/vesting/timelineLookup'
+
+type VestingContractConfig = { address: Address; abi: Abi; chainId: number }
 
 // ─── Vesting curve SVG ───────────────────────────────────────────────────────
 function VestingChart({
@@ -190,17 +198,17 @@ function ForecastTable({ schedule, now }: { schedule: VestingSchedule; now: numb
 }
 
 // ─── ScheduleDetail ──────────────────────────────────────────────────────────
-function ScheduleDetail({ id, currentTs }: { id: bigint; currentTs: number }) {
+function ScheduleDetail({ id, currentTs, contractConfig }: { id: bigint; currentTs: number; contractConfig: VestingContractConfig }) {
   const now = currentTs  // timestamp captured once at parent mount
   const [showForecast, setShowForecast] = useState(false)
 
   const { data: raw } = useReadContract({
-    ...CONTRACT,
+    ...contractConfig,
     functionName: 'getSchedule',
     args: [id],
   })
   const { data: claimable } = useReadContract({
-    ...CONTRACT,
+    ...contractConfig,
     functionName: 'claimableAmount',
     args: [id],
   })
@@ -224,7 +232,7 @@ function ScheduleDetail({ id, currentTs }: { id: bigint; currentTs: number }) {
               <StatusBadge status={status} />
             </div>
             <a
-              href={buildAddressExplorerUrl(CHAIN_ID, s.beneficiary)}
+              href={buildAddressExplorerUrl(contractConfig.chainId, s.beneficiary)}
               target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-1 text-sm font-medium hover:underline mt-0.5"
               style={{ color: 'var(--ink-2)' }}
@@ -294,12 +302,23 @@ function ScheduleDetail({ id, currentTs }: { id: bigint; currentTs: number }) {
 // ─── TimelineForecast ─────────────────────────────────────────────────────────
 export default function TimelineForecast() {
   const [input, setInput] = useState('')
-  const [ids, setIds] = useState<bigint[] | null>(null)
+  const [legacyIds, setLegacyIds] = useState<bigint[] | null>(null)
+  const [scheduleRefs, setScheduleRefs] = useState<TimelineScheduleRef[] | null>(null)
+  const [lookupDone, setLookupDone] = useState(false)
+  const [lookupWalletKey, setLookupWalletKey] = useState<string | null>(null)
+  const { address: connectedAddress, chainId } = useAccount()
+  const vault = useUserVestingVault()
+  const contractConfig = vault.contract ?? CONTRACT
+  const { byBeneficiary, loading: indexLoading, syncing: indexSyncing } = useVestingEvents()
+  const directBeneficiary = input.startsWith('0x') && input.length === 42 ? input as Address : undefined
+  const directReads = useBeneficiaryVestingSchedules(directBeneficiary)
   // useChainTime polls block.timestamp every 30 s — keeps vesting curves live
   const currentTs = useChainTime()
+  const walletStateKey = `${connectedAddress?.toLowerCase() ?? 'disconnected'}:${chainId ?? 'unknown'}`
+  const hasCurrentLookup = lookupDone && lookupWalletKey === walletStateKey
 
   const { refetch: fetchByAddress } = useReadContract({
-    ...CONTRACT,
+    ...contractConfig,
     functionName: 'getScheduleIds',
     args: [input as `0x${string}`],
     query: { enabled: false },
@@ -309,8 +328,34 @@ export default function TimelineForecast() {
     if (!input.startsWith('0x') || input.length !== 42) {
       return
     }
+
+    if (directReads.isLoading) {
+      setLookupDone(false)
+      return
+    }
+
+    if (directReads.refs.length > 0) {
+      setScheduleRefs(directReads.refs)
+      setLegacyIds(null)
+      setLookupDone(true)
+      setLookupWalletKey(walletStateKey)
+      return
+    }
+
+    const indexedRefs = selectTimelineSchedules(byBeneficiary, input)
+    if (indexedRefs.length > 0) {
+      setScheduleRefs(indexedRefs)
+      setLegacyIds(null)
+      setLookupDone(true)
+      setLookupWalletKey(walletStateKey)
+      return
+    }
+
     const res = await fetchByAddress()
-    setIds((res.data as bigint[] | undefined) ?? [])
+    setScheduleRefs([])
+    setLegacyIds((res.data as bigint[] | undefined) ?? [])
+    setLookupDone(true)
+    setLookupWalletKey(walletStateKey)
   }
 
   return (
@@ -325,7 +370,13 @@ export default function TimelineForecast() {
           type="text"
           placeholder="Beneficiary address 0x…"
           value={input}
-          onChange={e => setInput(e.target.value)}
+          onChange={e => {
+            setInput(e.target.value)
+            setLegacyIds(null)
+            setScheduleRefs(null)
+            setLookupDone(false)
+            setLookupWalletKey(null)
+          }}
           onKeyDown={e => { if (e.key === 'Enter') void handleLookup() }}
           className="flex-1 rounded-xl px-4 py-3 text-sm font-medium mono outline-none"
           style={{ background: 'var(--surface-strong)', border: '1px solid var(--border)', color: 'var(--ink)', minHeight: 44 }}
@@ -339,13 +390,42 @@ export default function TimelineForecast() {
         </button>
       </div>
 
-      {ids !== null && ids.length === 0 && (
+      {(indexLoading || indexSyncing) && (
+        <p className="text-xs" style={{ color: 'var(--muted)' }}>
+          Syncing vesting schedules across supported vaults…
+        </p>
+      )}
+      {directReads.error && (
+        <p className="text-xs" style={{ color: 'var(--muted)' }}>
+          Some schedule details are temporarily unavailable. Press Load to retry.
+        </p>
+      )}
+
+      {hasCurrentLookup && scheduleRefs !== null && scheduleRefs.length === 0 && legacyIds !== null && legacyIds.length === 0 && (
         <EmptyState icon={<AlertCircle size={24} />} title="No schedules found" sub="No vesting schedules exist for this address." />
       )}
 
-      {ids !== null && ids.length > 0 && (
+      {hasCurrentLookup && scheduleRefs !== null && scheduleRefs.length > 0 && (
         <div className="flex flex-col gap-4">
-          {ids.map(id => <ScheduleDetail key={id.toString()} id={id} currentTs={currentTs} />)}
+          {scheduleRefs.map(ref => {
+            const refConfig = ref.vaultAddress.toLowerCase() === CONTRACT.address.toLowerCase()
+              ? CONTRACT
+              : selfServiceVestingContract(ref.vaultAddress as Address)
+            return (
+              <ScheduleDetail
+                key={`${ref.vaultAddress.toLowerCase()}:${ref.scheduleId.toString()}`}
+                id={ref.scheduleId}
+                currentTs={currentTs}
+                contractConfig={refConfig}
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {hasCurrentLookup && legacyIds !== null && legacyIds.length > 0 && (
+        <div className="flex flex-col gap-4">
+          {legacyIds.map(id => <ScheduleDetail key={id.toString()} id={id} currentTs={currentTs} contractConfig={contractConfig} />)}
         </div>
       )}
     </div>

@@ -69,7 +69,7 @@ export function GrantCard({ grant }: { grant: GrantProgram }) {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-3">
           <CategoryChip category={grant.category} />
-          {grant.max_award && parseFloat(grant.max_award) > 0 && (
+          {grant.max_award && Number(grant.max_award) > 0 && (
             <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
               Up to {grant.max_award} USDC
             </span>

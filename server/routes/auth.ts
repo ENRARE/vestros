@@ -1,7 +1,14 @@
-import { generateNonce, buildSignMessage, verifySignature, issueToken } from '../auth'
+import { generateNonce, buildSignMessage, verifySignature, issueToken, requireAuth } from '../auth'
 import { clientIp, limitNonce, limitVerify, tooManyRequests } from '../rate-limit'
 
 export async function handleAuth(req: Request, url: URL): Promise<Response | null> {
+  // Validate the opaque bearer token without asking the wallet to sign again.
+  if (req.method === 'GET' && url.pathname === '/api/auth/session') {
+    const session = requireAuth(req)
+    if (!session) return Response.json({ error: 'Session expired' }, { status: 401 })
+    return Response.json({ address: session.address })
+  }
+
   // GET /api/auth/nonce?address=0x...
   if (req.method === 'GET' && url.pathname === '/api/auth/nonce') {
     const ip = clientIp(req)

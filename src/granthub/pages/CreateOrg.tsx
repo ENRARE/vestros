@@ -28,7 +28,7 @@ export function CreateOrg() {
     setLoading(true)
     try {
       await createOrg({ name, slug, description, website, twitter })
-      toast.success('Organization created')
+      toast.success('Organisation created')
       void navigate(`/granthub/dashboard`)
     } catch (e) {
       toast.error((e as Error).message)
@@ -40,7 +40,7 @@ export function CreateOrg() {
   if (!walletAddr || !sessionAddr) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-10">
-        <h1 className="display text-2xl font-bold mb-4" style={{ color: 'var(--ink)' }}>Create Organization</h1>
+        <h1 className="display text-2xl font-bold mb-4" style={{ color: 'var(--ink)' }}>Create Organisation</h1>
         <AuthBanner />
       </div>
     )
@@ -51,11 +51,11 @@ export function CreateOrg() {
 
   return (
     <div className="max-w-xl mx-auto px-4 py-8">
-      <h1 className="display text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Create Organization</h1>
+      <h1 className="display text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Create Organisation</h1>
 
       <div className="space-y-4">
         <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Organization Name</label>
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Organisation Name</label>
           <input value={name} onChange={e => handleNameChange(e.target.value)} placeholder="e.g. Arc Ecosystem Fund" className={field} style={fieldStyle} />
         </div>
         <div>
@@ -72,7 +72,7 @@ export function CreateOrg() {
         </div>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Description</label>
-          <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} className={`${field} resize-none`} style={fieldStyle} placeholder="What does your organization fund?" />
+          <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} className={`${field} resize-none`} style={fieldStyle} placeholder="What does your organisation fund?" />
         </div>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Website</label>
@@ -97,7 +97,7 @@ export function CreateOrg() {
           className="w-full py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50 mt-4"
           style={{ background: 'var(--accent)' }}
         >
-          {loading ? 'Creating…' : 'Create Organization'}
+          {loading ? 'Creating…' : 'Create Organisation'}
         </button>
       </div>
     </div>
