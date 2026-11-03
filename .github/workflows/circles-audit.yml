@@ -1,3 +1,4 @@
+
 name: Circles audit baseline
 
 on:
@@ -29,10 +30,39 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Initialize audit logs
+        shell: bash
+        run: |
+          mkdir -p audit-logs
+          echo "commit: $GITHUB_SHA" > audit-logs/environment.log
+          echo "runner: $RUNNER_OS" >> audit-logs/environment.log
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          mkdir -p audit-logs
+          (
+            set -euo pipefail
+            echo "Bun version: $(bun --version)"
+            test -f bun.lock
+            bun install --frozen-lockfile
+            test -f node_modules/@openzeppelin/contracts/access/Ownable.sol
+            test -f node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol
+            test -f node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
+            test -f node_modules/@openzeppelin/contracts/utils/Pausable.sol
+            test -f node_modules/@openzeppelin/contracts/utils/ReentrancyGuard.sol
+            echo "OpenZeppelin dependencies verified"
+          ) 2>&1 | tee audit-logs/dependencies.log
 
       - name: Install pinned Foundry toolchain
         uses: foundry-rs/foundry-toolchain@v1
