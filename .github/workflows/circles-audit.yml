@@ -1,0 +1,110 @@
+name: Circles audit baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/collective-signatures-phase1
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - 'foundry.toml'
+      - 'lib/**'
+      - 'scripts/verify-circles-audit-baseline.mjs'
+      - '.github/workflows/circles-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Linux Circle audit baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository and dependencies
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pinned Foundry toolchain
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+
+      - name: Run and capture Circle audit commands
+        shell: bash
+        run: |
+          set -u
+          mkdir -p audit-logs
+          overall=0
+
+          run_checked() {
+            name="$1"
+            shift
+            log="audit-logs/${name}.log"
+            {
+              echo "command: $*"
+              echo "started_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            } > "$log"
+
+            set +e
+            "$@" >> "$log" 2>&1
+            status=$?
+            set -e
+
+            {
+              echo "finished_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "exit_code: $status"
+            } >> "$log"
+            cat "$log"
+            echo "${name}: exit ${status}" | tee -a audit-logs/summary.txt
+            if [ "$status" -ne 0 ]; then
+              overall=1
+            fi
+          }
+
+          : > audit-logs/summary.txt
+          run_checked toolchain forge --version
+          run_checked baseline node scripts/verify-circles-audit-baseline.mjs
+          run_checked format forge fmt --check \
+            contracts/CircleApprovalPolicy.sol \
+            contracts/CircleFactory.sol \
+            contracts/CircleVault.sol \
+            contracts/ICircleApprovalPolicy.sol \
+            contracts/ICircleFactory.sol \
+            contracts/ICircleVault.sol \
+            contracts/script/DeployCircleFactory.s.sol \
+            contracts/test/CircleApprovalPolicy.t.sol \
+            contracts/test/CircleFactory.t.sol \
+            contracts/test/CircleVault.t.sol \
+            contracts/test/Circle.Invariants.t.sol \
+            contracts/test/DeploymentScriptGuards.t.sol
+          run_checked build forge build
+          run_checked non_invariant forge test --threads 1 --no-match-test '^invariant_'
+          run_checked policy forge test --match-path contracts/test/CircleApprovalPolicy.t.sol
+          run_checked factory forge test --match-path contracts/test/CircleFactory.t.sol
+          run_checked vault forge test --match-path contracts/test/CircleVault.t.sol
+          run_checked deployment_guards forge test --match-path contracts/test/DeploymentScriptGuards.t.sol
+          run_checked circle_invariants forge test --match-path contracts/test/Circle.Invariants.t.sol
+          run_checked self_service_invariants forge test --match-path contracts/test/SelfServiceVesting.t.sol --match-test invariant_
+          run_checked granthub_invariants forge test --match-path contracts/test/GrantPool.Invariant.t.sol
+          run_checked aggregate timeout --signal=TERM 30m forge test
+
+          exit "$overall"
+
+      - name: Upload Circle audit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: circles-audit-logs-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 14
