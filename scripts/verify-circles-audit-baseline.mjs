@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const expectedBaseRevision = '8fa4ed39e15d139d5262843a306dd17fcac048c4';
+const expectedBaseRevisions = [
+  // Original Phase 1 snapshot branch.
+  '8fa4ed39e15d139d5262843a306dd17fcac048c4',
+  // Clean audit branch rebased by application onto current origin/main.
+  '946ac7a3f5a61286e15f9d6af901bdedb190644f',
+];
 
 const expected = new Map([
   ['contracts/CircleApprovalPolicy.sol', 'bd0f765beb903158bd034ca05f227b7caa4709babfd07989461f145b2db2011e'],
@@ -23,7 +28,9 @@ const expected = new Map([
 ]);
 
 function sha256(relativePath) {
-  return createHash('sha256').update(readFileSync(resolve(root, relativePath))).digest('hex');
+  // Hash canonical LF text so a Windows CRLF checkout cannot create false drift.
+  const contents = readFileSync(resolve(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
+  return createHash('sha256').update(contents, 'utf8').digest('hex');
 }
 
 const failures = [];
@@ -35,16 +42,22 @@ try {
 }
 
 if (actualHead) {
-  try {
-    execFileSync('git', ['merge-base', '--is-ancestor', expectedBaseRevision, actualHead], {
-      cwd: root,
-      stdio: 'ignore',
-    });
-  } catch {
-    failures.push(`git history mismatch: expected ${expectedBaseRevision} to be an ancestor of ${actualHead}`);
+  const hasExpectedBase = expectedBaseRevisions.some((baseRevision) => {
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', baseRevision, actualHead], {
+        cwd: root,
+        stdio: 'ignore',
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!hasExpectedBase) {
+    failures.push(`git history mismatch: expected one of ${expectedBaseRevisions.join(', ')} to be an ancestor of ${actualHead}`);
   }
 } else {
-  failures.push(`git history unavailable: expected base revision ${expectedBaseRevision}`);
+  failures.push(`git history unavailable: expected one of ${expectedBaseRevisions.join(', ')}`);
 }
 
 for (const [relativePath, expectedHash] of expected) {
@@ -59,7 +72,7 @@ for (const [relativePath, expectedHash] of expected) {
   }
 }
 
-console.log(`Audit baseline base revision: ${expectedBaseRevision}`);
+console.log(`Audit baseline accepted base revisions: ${expectedBaseRevisions.join(', ')}`);
 console.log(`Audit baseline HEAD: ${actualHead || '<unavailable>'}`);
 console.log(`Audit baseline files checked: ${expected.size}`);
 

@@ -6,11 +6,14 @@ commit, or push.
 
 ## Review candidate and reproducibility
 
-- Branch: `feat/collective-signatures-phase1`
-- Expected base Git revision: `8fa4ed39e15d139d5262843a306dd17fcac048c4`
-- Candidate form: a descendant of that base revision plus the frozen Circle
-  source hashes. The current checkout still contains the candidate as
-  uncommitted files.
+- Clean audit branch: `feat/collective-signatures-audit-only` (local only).
+- Clean branch base: `origin/main` at `946ac7a3f5a61286e15f9d6af901bdedb190644f`.
+- Original Circle snapshot commit: `7aba8ce`.
+- Linux CI correction commit: `d7ca6b7`.
+- Applied clean-branch commits: `9b05507` and `7e6a8b9`, followed by a
+  narrowly scoped verifier/documentation cleanup commit.
+- The original feature branch `feat/collective-signatures-phase1` is not
+  rewritten or modified by this preparation.
 - Existing `cache/` is unrelated and must be preserved.
 - No deployed Vestros Mainnet contract is modified by this candidate.
 
@@ -32,12 +35,15 @@ forge test --threads 1
 forge test
 ```
 
-The baseline verifier checks that the expected base revision is an ancestor of
-the current checkout and compares SHA-256 hashes against twelve frozen Circle
-source/test/deployment entries. It never regenerates expected hashes. It must
-pass before an external reviewer begins. A reviewer should preserve the
-uncommitted files or place them in a proposed snapshot commit without changing
-their contents.
+The baseline verifier checks that one of two explicit trusted base revisions is
+an ancestor of the current checkout: the original feature base
+`8fa4ed39e15d139d5262843a306dd17fcac048c4`, or the clean-branch base
+`946ac7a3f5a61286e15f9d6af901bdedb190644f`. It compares canonical LF SHA-256
+hashes against twelve frozen Circle source/test/deployment entries. It never
+regenerates expected hashes. It must pass before an external reviewer begins.
+The clean branch contains exactly the 18 paths from the original Circle
+snapshot plus the CI correction applied to the workflow; no unrelated
+frontend/Mainnet files are included.
 
 ## Toolchain and dependencies
 
@@ -57,9 +63,12 @@ The repository now contains
 `.github/workflows/circles-audit.yml`, which provisions Ubuntu 24.04, checks
 out the full repository with recursive submodules, installs Foundry 1.7.1,
 runs the frozen baseline and all individual/aggregate test commands, and
-uploads per-command logs. The workflow has been prepared but cannot be
-executed from this local checkout without a GitHub Actions run, so Linux
-results remain **not verified** until the workflow is run.
+uploads per-command logs. GitHub Actions run `41674166329` (pull request) and
+the corresponding push run `41674155874` both completed successfully. The
+pull-request run checked out merge revision `0ec2e177b3e9e923dc886c7b2d158f4264b018bb`,
+ran the aggregate suite, and uploaded `circles-audit-logs-41674166329`.
+The artifact summary reports exit 0 for the baseline, formatting, build, all
+individual suites, all three invariant groups, and aggregate `forge test`.
 
 ## Contract scope and trust boundaries
 
@@ -241,40 +250,32 @@ service, EIP-1271 signature, or off-chain approval is trusted in Phase 1.
 
 ## Reproducibility and Forge investigation
 
-Observed clean results on Windows:
+Observed clean results on Windows in the isolated audit worktree:
 
 - `forge fmt --check`: exit 0.
 - `forge build`: exit 0; only timestamp and test-cast warnings.
 - `forge test --threads 1 --no-match-test "^invariant_"`: 246 passed, exit 0,
-  approximately 3.35 seconds wall time.
-- Circle policy: 18 passed, exit 0.
-- Circle factory: 16 passed, exit 0.
-- Circle vault: 26 passed, exit 0.
-- Deployment guards: 6 passed, exit 0.
-- Circle invariants: 3 properties × 128,000 calls, exit 0.
-- SelfService invariants: 1 property × 128,000 calls, exit 0.
-- GrantPool invariants: 3 properties × 128,000 calls, exit 0.
+  approximately 3.20 seconds wall time.
+- Circle invariants: 3 properties x 128,000 calls, exit 0, 544.73 seconds.
+- SelfService invariants: 1 property x 128,000 calls, exit 0, 111.09 seconds.
+- GrantPool invariants: 3 properties x 128,000 calls, exit 0, 220.83 seconds.
+
+The ordinary-suite run includes the Circle policy, factory, vault, and
+deployment-guard suites. All 246 tests passed with zero failures.
 
 Aggregate investigation:
 
-- `forge test` completed ordinary suites and remained CPU-active during
-  invariant execution; it was stopped with Ctrl-C, exit 1, without an
-  aggregate summary.
-- `forge test --threads 1` is supported by Forge 1.7.1. It completed Circle
-  and GrantPool invariant suites with zero failures, then remained active
-  without a final aggregate exit; it was stopped with Ctrl-C, exit 1.
-- At the time of inspection the active Forge process was responsive, about
-  73.8 MB working set and 169 CPU seconds in the single-worker run. After
-  interruption no `forge` or `anvil` process remained.
-- Cross-platform runner behavior was not previously verified locally. The
-  Phase 1.8 workflow now provides the Linux comparison; its first run is still
-  pending.
+- The clean-branch individual invariant runs completed and exited 0. The
+  historical Windows aggregate hang remains a separate reproducibility issue;
+  it was not treated as a passing aggregate run.
+- The clean-branch check uses `forge test --threads 1` for deterministic
+  invariant execution. Invariant depth was not reduced.
+- Linux aggregate status must be taken from the GitHub Actions run rather than
+  inferred from local Windows behavior.
 
-This points to a test-run lifecycle/performance issue rather than an assertion
-failure. The current evidence does not identify whether the final delay is
-Forge teardown, Windows process handling, or the remaining expensive invariant
-suite. The invariant depth must not be reduced to make the aggregate command
-return.
+The earlier evidence points to a test-run lifecycle/performance issue rather
+than an assertion failure. No assertion failure was observed in the clean
+individual suites, and the invariant depth was preserved.
 
 ## Source hashes
 
@@ -297,19 +298,27 @@ candidate are:
 | `contracts/test/CircleVault.t.sol` | `d371ae02af15f5e84d2e4efa762356e21d6bed1f9ec4280fa2bb5870aea6a89a` |
 | `contracts/test/DeploymentScriptGuards.t.sol` | `78e668c0b41fee49da78ea9077421f67766074d85233f4b51f6929afc5480a6c` |
 
-Supporting handoff artifacts at this revision:
+Supporting handoff artifact hashes at the clean branch:
 
-- `scripts/verify-circles-audit-baseline.mjs` — `420988230b38c0fac6804b9029a08e55480f0a8023f23974cfec754e39cb3a4d`
-- `.github/workflows/circles-audit.yml` — `b418697a34fae62f19f23d2c799cdd2fcc4f55652005eca912cd34137bf91eb3`
+- `scripts/verify-circles-audit-baseline.mjs` -
+  `092f6e48849ce0d109d6cc1832d415e3dec3e1c95c7b09d519f9506b512f5237`
+- `.github/workflows/circles-audit.yml` -
+  `2321bcf644e38cbcc1650606e3cc39f4071678fbd8fb01b6232b8685428bfafd`
 
-## Proposed audit snapshot commit
+The clean branch changes the verifier only to accept the two explicit base
+revisions above and to normalize CRLF to LF before hashing. The twelve frozen
+source hashes remain unchanged. The final verifier hash is recorded after the
+cleanup commit is created.
 
-No commit is being created automatically. The proposed snapshot should be a
-single commit descended from `8fa4ed39e15d139d5262843a306dd17fcac048c4` with a
-message such as:
+## Clean audit branch contents
+
+The clean branch applies the original snapshot and CI correction without
+rewriting either source commit. A final local cleanup commit contains only the
+portable verifier and documentation-only corrections. The resulting branch is
+not pushed by this procedure.
 
 ```text
-circles: freeze phase 1 audit candidate and Linux CI
+audit(circles): make clean snapshot verification portable
 ```
 
 It should contain only:
@@ -325,9 +334,9 @@ It should contain only:
 
 It must exclude `.env` files, credentials, private keys, `cache/`, build
 outputs, broadcast artifacts, local logs, node_modules, and unrelated
-application changes. The baseline verifier should pass in that snapshot
-because the snapshot commit is a descendant of the expected base revision and
-the audited source hashes remain unchanged.
+application changes. The baseline verifier passes on the clean branch because
+its history check accepts the explicit current-main base as well as the
+original feature base, while the audited source hashes remain unchanged.
 
 ## Deployment and verification checklist
 
@@ -366,12 +375,11 @@ Deployment is **not ready**. When separately authorized, the operator must:
   trusted factory registration and canonical token checks.
 - EIP-1271/off-chain signatures and Safe modules are intentionally deferred.
 - Aggregate Windows Forge process exit is not clean, including with one worker.
-- Linux CI workflow is prepared but its first GitHub Actions execution and
-  artifact review are still pending.
+- Linux CI passed in both the pull-request and push runs listed above; the
+  uploaded artifact summary records exit 0 for every command.
 
 Final decision: **GO for independent external-audit handoff, HOLD for Testnet
 financial activation**. The handoff is reproducible from the frozen manifest,
-but activation remains blocked until the external review, signer/deployment
-approval, deployment verification, minimal rehearsal, clean Linux comparison,
-and aggregate test-run investigation are independently accepted. This package
-is not an audit certificate.
+and activation remains blocked until the external review, signer/deployment
+approval, deployment verification, and minimal rehearsal are independently
+accepted. This package is not an audit certificate.

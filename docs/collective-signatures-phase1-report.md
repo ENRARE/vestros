@@ -1,6 +1,6 @@
 # Vestros Collective Signatures — Phase 1 Report
 
-Date: 2026-11-03  
+Date: 2026-11-03
 Scope: Arc Testnet prototype implementation only
 
 ## Result
@@ -124,7 +124,7 @@ or authorized for activation.
 
 ## Phase 1.5 security review
 
-Review date: 2026-11-03  
+Review date: 2026-11-03
 Review type: internal, security-focused implementation review; this is not an
 independent external audit.
 
@@ -289,7 +289,7 @@ was performed. The pre-existing `cache/` directory was left untouched.
 
 ## Phase 1.6 governance remediation
 
-Review date: 2026-11-03  
+Review date: 2026-11-03
 Review type: internal security-focused hardening review; this is not an
 independent external audit.
 
